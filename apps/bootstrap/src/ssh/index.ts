@@ -1,3 +1,5 @@
+import { resolveSshKnownHostsHostToken } from '@happier-dev/cli-common/systemTasks';
+
 export interface SshAuthConfig {
   kind: 'agent' | 'keyfile';
   identityFile?: string;
@@ -44,6 +46,7 @@ function quoteForRemoteBash(command: string): string {
 }
 
 function resolveCommonSshArgs(params: Readonly<{
+  target: string;
   port?: number;
   auth: SshAuthConfig;
   knownHosts: SshKnownHostsConfig;
@@ -84,6 +87,14 @@ function resolveCommonSshArgs(params: Readonly<{
       '-o',
       `UserKnownHostsFile=${knownHostsPath}`,
     );
+
+    // The trust scan stores the key under the target token, but `ssh` follows
+    // `ssh_config` `HostName` rewrites and would otherwise verify a different,
+    // never-trusted host token.
+    const hostKeyAlias = resolveSshKnownHostsHostToken({ target: params.target, port: params.port });
+    if (hostKeyAlias) {
+      args.push('-o', `HostKeyAlias=${hostKeyAlias}`);
+    }
   }
 
   args.push(
@@ -104,6 +115,7 @@ export function buildSshCommand(params: BuildSshCommandParams): SshCommandInvoca
     throw new Error('ssh target is required');
   }
   const args = resolveCommonSshArgs({
+    target,
     port: params.port,
     auth: params.auth,
     knownHosts: params.knownHosts,
@@ -134,6 +146,7 @@ export function buildScpCommand(params: BuildScpCommandParams): ScpCommandInvoca
   }
 
   const args = resolveCommonSshArgs({
+    target,
     port: params.port,
     auth: params.auth,
     knownHosts: params.knownHosts,

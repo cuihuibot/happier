@@ -127,7 +127,7 @@ describe('createVendorResumeIdMetadataPublisher', () => {
   it('writes again for a new generation even when the opaque id is unchanged', async () => {
     const updateMetadata = vi.fn(async () => {});
     const publisher = createVendorResumeIdMetadataPublisher({
-      agentId: 'copilot',
+      agentId: 'kiro',
       getMetadataSnapshot: () => createTestMetadata(),
       updateMetadata,
     });
@@ -138,8 +138,7 @@ describe('createVendorResumeIdMetadataPublisher', () => {
     expect(updateMetadata).toHaveBeenCalledTimes(2);
   });
 
-  it('rejects an empty bound identity and an agent without a vendor resume field', async () => {
-    const updateMetadata = vi.fn(async () => {});
+  it('rejects an empty bound identity and an agent without a vendor resume field', async () => {    const updateMetadata = vi.fn(async () => {});
     const publisher = createVendorResumeIdMetadataPublisher({
       agentId: 'qwen',
       getMetadataSnapshot: () => createTestMetadata(),
@@ -157,5 +156,143 @@ describe('createVendorResumeIdMetadataPublisher', () => {
       getMetadataSnapshot: () => createTestMetadata(),
       updateMetadata,
     })).toThrow(/does not declare a vendor resume metadata field/i);
+  });
+
+  describe('deferred durability (after-first-persisted-turn agents)', () => {
+    it('does not publish a created Copilot identity before the vendor session is durable', async () => {
+      const updateMetadata = vi.fn(async () => {});
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'copilot',
+        getMetadataSnapshot: () => createTestMetadata(),
+        updateMetadata,
+      });
+
+      await publisher.persistBound({ generation: 0, operation: 'create', vendorSessionId: 'copilot-new' });
+
+      expect(updateMetadata).not.toHaveBeenCalled();
+    });
+
+    it('publishes the created Copilot identity once the vendor session is confirmed durable', async () => {
+      let metadata = createTestMetadata({ name: 'keep-me' });
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'copilot',
+        getMetadataSnapshot: () => metadata,
+        updateMetadata: (updater) => { metadata = updater(metadata); },
+      });
+
+      await publisher.persistBound({ generation: 0, operation: 'create', vendorSessionId: 'copilot-new' });
+      await publisher.confirmVendorSessionDurable({ generation: 0, vendorSessionId: 'copilot-new' });
+
+      expect(metadata).toEqual(createTestMetadata({ name: 'keep-me', copilotSessionId: 'copilot-new' }));
+    });
+
+    it('keeps a previously durable resume id instead of clobbering it with a fresh unusable session', async () => {
+      let metadata = createTestMetadata({ copilotSessionId: 'copilot-durable' });
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'copilot',
+        getMetadataSnapshot: () => metadata,
+        updateMetadata: (updater) => { metadata = updater(metadata); },
+      });
+
+      // Resume failed, so the runtime fell back to a brand new vendor session that
+      // Copilot cannot load yet. The good id must survive.
+      await publisher.persistBound({ generation: 1, operation: 'create', vendorSessionId: 'copilot-fresh' });
+
+      expect(metadata).toEqual(createTestMetadata({ copilotSessionId: 'copilot-durable' }));
+
+      await publisher.confirmVendorSessionDurable({ generation: 1, vendorSessionId: 'copilot-fresh' });
+      expect(metadata).toEqual(createTestMetadata({ copilotSessionId: 'copilot-fresh' }));
+    });
+
+    it('ignores a durability confirmation from a superseded runtime generation', async () => {
+      const updateMetadata = vi.fn(async () => {});
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'copilot',
+        getMetadataSnapshot: () => createTestMetadata(),
+        updateMetadata,
+      });
+
+      await publisher.persistBound({ generation: 2, operation: 'create', vendorSessionId: 'copilot-new' });
+      await publisher.confirmVendorSessionDurable({ generation: 1, vendorSessionId: 'copilot-new' });
+      await publisher.confirmVendorSessionDurable({ generation: 2, vendorSessionId: 'copilot-other' });
+
+      expect(updateMetadata).not.toHaveBeenCalled();
+    });
+
+    it('retries a deferred publication on a later durability confirmation after a transient write failure', async () => {
+      const updateMetadata = vi.fn()
+        .mockRejectedValueOnce(new Error('write failed'))
+        .mockResolvedValueOnce(undefined);
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'copilot',
+        getMetadataSnapshot: () => createTestMetadata(),
+        updateMetadata,
+      });
+
+      await publisher.persistBound({ generation: 0, operation: 'create', vendorSessionId: 'copilot-new' });
+      await expect(publisher.confirmVendorSessionDurable({
+        generation: 0,
+        vendorSessionId: 'copilot-new',
+      })).rejects.toThrow('write failed');
+
+      // The runtime treats a failed publication as non-fatal, so the deferred binding must
+      // survive for the next turn boundary; otherwise the durable id is lost for the session.
+      await expect(publisher.confirmVendorSessionDurable({
+        generation: 0,
+        vendorSessionId: 'copilot-new',
+      })).resolves.toBeUndefined();
+      expect(updateMetadata).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a newer deferred generation publishable when an older confirmation completes late', async () => {
+      let metadata = createTestMetadata();
+      const write = createDeferred<void>();
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'copilot',
+        getMetadataSnapshot: () => metadata,
+        updateMetadata: async (updater) => {
+          metadata = updater(metadata);
+          await write.promise;
+        },
+      });
+
+      await publisher.persistBound({ generation: 0, operation: 'create', vendorSessionId: 'copilot-old' });
+      const publishingOld = publisher.confirmVendorSessionDurable({ generation: 0, vendorSessionId: 'copilot-old' });
+      await Promise.resolve();
+
+      // A new runtime generation supersedes the deferred binding while the old write is still open.
+      await publisher.persistBound({ generation: 1, operation: 'create', vendorSessionId: 'copilot-new' });
+      write.resolve(undefined);
+      await publishingOld;
+
+      await publisher.confirmVendorSessionDurable({ generation: 1, vendorSessionId: 'copilot-new' });
+      expect(metadata).toEqual(createTestMetadata({ copilotSessionId: 'copilot-new' }));
+    });
+
+    it('publishes a resumed Copilot identity immediately because the vendor session is already durable', async () => {
+      const updateMetadata = vi.fn(async () => {});
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'copilot',
+        getMetadataSnapshot: () => createTestMetadata(),
+        updateMetadata,
+      });
+
+      await publisher.persistBound({ generation: 0, operation: 'resume', vendorSessionId: 'copilot-old' });
+
+      expect(updateMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    it('publishes immediately for agents whose vendor id is durable at session open', async () => {
+      const updateMetadata = vi.fn(async () => {});
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'qwen',
+        getMetadataSnapshot: () => createTestMetadata(),
+        updateMetadata,
+      });
+
+      await publisher.persistBound({ generation: 0, operation: 'create', vendorSessionId: 'qwen-new' });
+
+      expect(updateMetadata).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -37,6 +37,40 @@ function computeSshFingerprint(key: string): string {
   return `SHA256:${digest}`;
 }
 
+const SSH_DEFAULT_PORT = 22;
+
+export function extractSshTargetHost(target: string): string {
+  const trimmed = String(target ?? '').trim();
+  const atIndex = trimmed.lastIndexOf('@');
+  return atIndex >= 0 ? trimmed.slice(atIndex + 1) : trimmed;
+}
+
+/**
+ * Host token OpenSSH uses to key an entry in `known_hosts`, matching `ssh-keyscan`
+ * output and `put_host_port` (`[host]:port` for non-default ports).
+ *
+ * App-managed connections pass this token as `HostKeyAlias` so the key accepted during
+ * the trust scan is the key verified later, even when `ssh_config` rewrites `HostName`
+ * to a different address.
+ */
+export function resolveSshKnownHostsHostToken(params: Readonly<{
+  target: string;
+  port?: number;
+}>): string {
+  const host = extractSshTargetHost(params.target);
+  if (!host) {
+    return '';
+  }
+  const port = Number(params.port);
+  if (!Number.isFinite(port)) {
+    return host;
+  }
+  const normalizedPort = Math.floor(port);
+  return normalizedPort > 0 && normalizedPort !== SSH_DEFAULT_PORT
+    ? `[${host}]:${normalizedPort}`
+    : host;
+}
+
 export function parseSshKnownHostLine(line: string): ParsedSshKnownHostLine | null {
   const normalizedLine = String(line ?? '').trim();
   if (!normalizedLine || normalizedLine.startsWith('#')) {

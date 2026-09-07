@@ -37,7 +37,7 @@ vi.mock('./taskRuntime.js', async (importOriginal) => {
   };
 });
 
-import { resolveLocalHappierCommand, runLocalHappierJsonCommand } from './happierCli.js';
+import { resolveLocalHappierCommand, runLocalHappierJsonCommand, runLocalHappierJsonCommandResult } from './happierCli.js';
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -225,7 +225,7 @@ describe('runLocalHappierJsonCommand', () => {
     }
   });
 
-  it('returns ok:false json envelopes when allowJsonFailure is set even if the CLI exits non-zero', async () => {
+  it('preserves the exit status alongside the parsed envelope for callers that must fail closed', async () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'hsetup-cli-json-exit-1-'));
     const cliPath = join(rootDir, 'fake-happier');
 
@@ -242,19 +242,32 @@ describe('runLocalHappierJsonCommand', () => {
         stderr: '',
       });
 
-      await expect(runLocalHappierJsonCommand({
+      await expect(runLocalHappierJsonCommandResult({
         args: ['auth', 'status', '--json'],
-        allowJsonFailure: true,
         processEnv: {
           ...process.env,
           HAPPIER_BOOTSTRAP_CLI_PATH: cliPath,
         },
       })).resolves.toMatchObject({
-        ok: false,
-        kind: 'auth_status',
-        error: {
-          code: 'not_authenticated',
+        status: 1,
+        parsed: {
+          ok: false,
+          kind: 'auth_status',
+          error: {
+            code: 'not_authenticated',
+          },
         },
+      });
+
+      // The throwing wrapper must stay fail-closed on the same output.
+      await expect(runLocalHappierJsonCommand({
+        args: ['auth', 'status', '--json'],
+        processEnv: {
+          ...process.env,
+          HAPPIER_BOOTSTRAP_CLI_PATH: cliPath,
+        },
+      })).rejects.toMatchObject({
+        code: 'cli_command_failed',
       });
     } finally {
       rmSync(rootDir, { recursive: true, force: true });

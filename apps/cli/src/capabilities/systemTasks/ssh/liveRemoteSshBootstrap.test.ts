@@ -82,6 +82,8 @@ function jsonResult(data: Record<string, unknown>) {
 
 const TRUSTED_HOST_KEY = 'example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
 const MISMATCHED_TRUSTED_HOST_KEY = 'example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+const CONFIG_RESOLVED_HOST_TOKEN = '[127.0.0.1]:50977';
+const CONFIG_RESOLVED_HOST_KEY = `${CONFIG_RESOLVED_HOST_TOKEN} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB`;
 
 describe('createLiveRemoteSshBootstrapTaskKind', () => {
   beforeEach(() => {
@@ -241,6 +243,70 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
       .map(([, args]) => args as readonly string[]);
 
     expect(sshInvocations.some((args) => args.includes('-F') && args.includes('/tmp/lima-ssh.config'))).toBe(true);
+  });
+
+  it('verifies the exact known_hosts token it accepted when ssh_config rewrites HostName and Port', async () => {
+    const baseSpawnSync = spawnSync.getMockImplementation();
+    spawnSync.mockImplementation((command: string, args: readonly string[] = []) => {
+      if (command === 'ssh-keyscan') {
+        return {
+          status: 0,
+          stdout: `${CONFIG_RESOLVED_HOST_KEY}\n`,
+          stderr: '',
+        };
+      }
+      return baseSpawnSync?.(command, args);
+    });
+
+    const kind = createLiveRemoteSshBootstrapTaskKind();
+
+    await kind.run({
+      params: {
+        ssh: {
+          target: 'lima-happier-wsrepl-qa-local',
+          auth: 'agent',
+          sshConfigFile: '/tmp/lima-ssh.config',
+        },
+        relay: {
+          relayUrl: 'https://relay.example.test',
+        },
+        channel: 'preview',
+        serviceMode: 'none',
+      },
+      emit: () => undefined,
+      prompt: async (request) => {
+        if (request.kind === 'auth.approveRemoteProvisioning') {
+          return { approved: true };
+        }
+        if (request.kind === 'ssh.trustHost' || request.kind === 'ssh.replaceHostKey') {
+          return { trusted: true };
+        }
+        throw new Error(`Unexpected prompt: ${request.kind}`);
+      },
+    });
+
+    // The scan runs against the ssh_config-resolved endpoint, so the accepted token is
+    // `[hostname]:port` rather than the alias the user typed.
+    const keyscanArgs = spawnSync.mock.calls
+      .filter(([command]) => command === 'ssh-keyscan')
+      .map(([, args]) => args as readonly string[]);
+    expect(keyscanArgs).toHaveLength(1);
+    expect(keyscanArgs[0]).toEqual(['-T', '5', '-p', '50977', '-t', 'ed25519', '127.0.0.1']);
+    expect(writeFileSync).toHaveBeenCalledWith(
+      '/mock-home/ssh/known_hosts',
+      `${CONFIG_RESOLVED_HOST_KEY}\n`,
+      'utf8',
+    );
+
+    // Every later transport invocation must verify that same token; pinning the alias
+    // would verify a host key the trust step never accepted.
+    const transportArgs = spawnSync.mock.calls
+      .filter(([command, args]) => (command === 'ssh' && !(args as readonly string[]).includes('-G')) || command === 'scp')
+      .map(([, args]) => args as readonly string[]);
+    expect(transportArgs.length).toBeGreaterThan(0);
+    for (const args of transportArgs) {
+      expect(args).toContain(`HostKeyAlias=${CONFIG_RESOLVED_HOST_TOKEN}`);
+    }
   });
 
   it('installs the remote CLI from the verified payload path instead of curl-bash', async () => {

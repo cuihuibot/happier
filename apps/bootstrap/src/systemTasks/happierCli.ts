@@ -69,11 +69,26 @@ export function resolveLocalHappierCommand(params: Readonly<{
   return 'happier';
 }
 
-export async function runLocalHappierJsonCommand(params: Readonly<{
+export type LocalHappierJsonCommandResult = Readonly<{
+  status: number;
+  stdout: string;
+  stderr: string;
+  parsed: unknown;
+}>;
+
+/**
+ * Runs a `--json` Happier CLI command and returns the exit status alongside the parsed
+ * stdout envelope.
+ *
+ * Commands such as `happier auth status --json` report an expected outcome as a structured
+ * envelope on stdout with a nonzero exit code, so the caller must be able to see both. Every
+ * caller that reads this must stay fail-closed: a nonzero status is only acceptable for an
+ * envelope the caller explicitly recognises.
+ */
+export async function runLocalHappierJsonCommandResult(params: Readonly<{
   args: readonly string[];
   processEnv?: NodeJS.ProcessEnv;
-  allowJsonFailure?: boolean;
-}>): Promise<unknown> {
+}>): Promise<LocalHappierJsonCommandResult> {
   const processEnv = params.processEnv ?? process.env;
   const command = await ensureLocalFirstPartyComponentCommand({
     componentId: 'happier-cli',
@@ -92,16 +107,38 @@ export async function runLocalHappierJsonCommand(params: Readonly<{
     throw new systemTasks.SystemTaskExecutionError('cli_spawn_failed', message);
   });
 
-  const parsed = parseFirstJsonObject(result.stdout);
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    parsed: parseFirstJsonObject(result.stdout),
+  };
+}
+
+export function createLocalHappierCommandFailure(params: Readonly<{
+  args: readonly string[];
+  stdout: string;
+  stderr: string;
+}>): Error {
+  return new systemTasks.SystemTaskExecutionError(
+    'cli_command_failed',
+    params.stderr.trim() || params.stdout.trim() || `Command failed: ${params.args.join(' ')}`,
+  );
+}
+
+export async function runLocalHappierJsonCommand(params: Readonly<{
+  args: readonly string[];
+  processEnv?: NodeJS.ProcessEnv;
+}>): Promise<unknown> {
+  const result = await runLocalHappierJsonCommandResult(params);
+  const parsed = result.parsed;
 
   if (result.status !== 0) {
-    if (params.allowJsonFailure && parsed && typeof parsed === 'object') {
-      return parsed;
-    }
-    throw new systemTasks.SystemTaskExecutionError(
-      'cli_command_failed',
-      result.stderr.trim() || result.stdout.trim() || `Command failed: ${command}`,
-    );
+    throw createLocalHappierCommandFailure({
+      args: params.args,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    });
   }
 
   if (!parsed || typeof parsed !== 'object') {
@@ -111,7 +148,7 @@ export async function runLocalHappierJsonCommand(params: Readonly<{
     );
   }
 
-  if (!params.allowJsonFailure && isJsonFailureEnvelope(parsed)) {
+  if (isJsonFailureEnvelope(parsed)) {
     const envelope = parsed as {
       error?: { code?: unknown; message?: unknown } | unknown;
       message?: unknown;

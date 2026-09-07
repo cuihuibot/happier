@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { resolveSshKnownHostsHostToken } from '@happier-dev/cli-common/systemTasks';
+
 export type SshAuth =
   | Readonly<{ mode: 'agent' }>
   | Readonly<{ mode: 'keyFile'; privateKeyPath: string }>
@@ -68,9 +70,11 @@ function renderKnownHosts(entries: readonly KnownHostEntry[]): string {
 }
 
 function buildSshTransportArgs(params: Readonly<{
+  target: string;
   knownHostsPath?: string;
   sshConfigFile?: string;
   knownHostsMode?: 'app' | 'system';
+  hostKeyAlias?: string;
   auth: SshAuth;
   port?: number;
   connectTimeoutSec: number;
@@ -92,6 +96,15 @@ function buildSshTransportArgs(params: Readonly<{
       '-o', `UserKnownHostsFile=${params.knownHostsPath ?? ''}`,
       '-o', 'GlobalKnownHostsFile=/dev/null',
     );
+    // Keep host-key verification on the token the trust store recorded, even when
+    // `ssh_config` rewrites `HostName`/`Port` to a different endpoint. Callers that
+    // resolved the endpoint themselves pass the accepted token verbatim; otherwise the
+    // raw target and explicit port already are the token that was scanned.
+    const hostKeyAlias = String(params.hostKeyAlias ?? '').trim()
+      || resolveSshKnownHostsHostToken({ target: params.target, port: params.port });
+    if (hostKeyAlias) {
+      args.push('-o', `HostKeyAlias=${hostKeyAlias}`);
+    }
   }
 
   args.push(
@@ -122,6 +135,7 @@ export function buildSshCommand(params: Readonly<{
   sshConfigFile?: string;
   knownHostsPath?: string;
   knownHostsMode?: 'app' | 'system';
+  hostKeyAlias?: string;
   auth: SshAuth;
   port?: number;
   connectTimeoutSec: number;
@@ -133,9 +147,11 @@ export function buildSshCommand(params: Readonly<{
   redactedLabel: string;
 }> {
   const args = buildSshTransportArgs({
+    target: params.target,
     knownHostsPath: params.knownHostsPath,
     sshConfigFile: params.sshConfigFile,
     knownHostsMode: params.knownHostsMode,
+    hostKeyAlias: params.hostKeyAlias,
     auth: params.auth,
     port: params.port,
     connectTimeoutSec: params.connectTimeoutSec,
@@ -165,6 +181,7 @@ export function buildScpCommand(params: Readonly<{
   sshConfigFile?: string;
   knownHostsPath?: string;
   knownHostsMode?: 'app' | 'system';
+  hostKeyAlias?: string;
   auth: SshAuth;
   port?: number;
   connectTimeoutSec: number;
@@ -176,9 +193,11 @@ export function buildScpCommand(params: Readonly<{
   redactedLabel: string;
 }> {
   const args = buildSshTransportArgs({
+    target: params.target,
     knownHostsPath: params.knownHostsPath,
     sshConfigFile: params.sshConfigFile,
     knownHostsMode: params.knownHostsMode,
+    hostKeyAlias: params.hostKeyAlias,
     auth: params.auth,
     port: params.port,
     connectTimeoutSec: params.connectTimeoutSec,

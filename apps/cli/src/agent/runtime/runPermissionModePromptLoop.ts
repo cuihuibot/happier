@@ -289,8 +289,10 @@ export async function runPermissionModePromptLoop(opts: {
             ? new StrictInitialResumeError('Strict initial resume failed', error)
             : new ResumeFailClosedError('Resume failed closed', error);
         } else {
-          opts.messageBuffer.addMessage('Resume failed; starting a new session.', 'status');
-          opts.session.sendAgentMessage(opts.agentMessageType, { type: 'message', message: 'Resume failed; starting a new session.' });
+          const formatted = opts.formatPromptErrorMessage(error);
+          const detail = `Resume failed; starting a new session: ${formatted}`;
+          opts.messageBuffer.addMessage(detail, 'status');
+          opts.session.sendAgentMessage(opts.agentMessageType, { type: 'message', message: detail });
           await opts.runtime.reset();
           if (opts.shouldExit()) return { startedFreshSessionForTurn };
           await opts.runtime.startOrLoad(buildStartOrLoadOptions());

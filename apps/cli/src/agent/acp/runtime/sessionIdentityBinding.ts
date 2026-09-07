@@ -12,6 +12,16 @@ export type AcpSessionIdentityPublication =
   | Readonly<{
     kind: 'persist-bound';
     persistBound: (event: AcpBoundSessionIdentity) => Promise<void>;
+    /**
+     * Report that the bound vendor session has persisted a turn.
+     *
+     * Only supplied for Agents whose vendor resume id is not a usable resume
+     * target until then; publication is deferred until this is called.
+     */
+    confirmVendorSessionDurable?: (event: Readonly<{
+      generation: number;
+      vendorSessionId: string;
+    }>) => Promise<void>;
   }>
   | Readonly<{ kind: 'external-owner' }>
   | Readonly<{

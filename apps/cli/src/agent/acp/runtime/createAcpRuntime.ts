@@ -662,6 +662,29 @@ export function createAcpRuntime(params: {
       : async () => {},
   });
 
+  const confirmVendorSessionDurable = params.sessionIdentity.kind === 'persist-bound'
+    ? params.sessionIdentity.confirmVendorSessionDurable ?? null
+    : null;
+
+  /**
+   * A turn that reached its end boundary is the point at which an Agent that
+   * only materializes a resumable session after its first persisted turn has one.
+   * Publication of such an Agent's vendor resume id waits for this signal.
+   */
+  const confirmVendorSessionDurableAtTurnBoundary = async (): Promise<void> => {
+    if (!confirmVendorSessionDurable) return;
+    const bound = identityBinding.getBound();
+    if (!bound) return;
+    try {
+      await confirmVendorSessionDurable({
+        generation: bound.generation,
+        vendorSessionId: bound.vendorSessionId,
+      });
+    } catch (error) {
+      logger.debug(`[${params.provider}] Failed to publish vendor resume id at turn boundary (non-fatal)`, error);
+    }
+  };
+
   const stopPendingPump = () => {
     if (!pendingPumpController) return;
     try {
@@ -2563,6 +2586,9 @@ export function createAcpRuntime(params: {
       stopPendingPump();
       params.onThinkingChange(false);
       params.session.keepAlive(false, 'remote');
+      if (!turnAborted) {
+        await confirmVendorSessionDurableAtTurnBoundary();
+      }
       if (pendingTurnOutcome && pendingTurnOutcome.kind !== 'completed') {
         const providerTurnId = ensureCurrentTurnId();
         if (!taskStartedSent && params.session.sessionTurnLifecycle) {

@@ -1,6 +1,11 @@
 import { systemTasks } from '@happier-dev/cli-common';
 
-import { runLocalHappierJsonCommand } from './happierCli.js';
+import { classifyAuthStatusFailureEnvelope, createAuthStatusUnavailableError } from './authStatusEnvelope.js';
+import {
+  createLocalHappierCommandFailure,
+  runLocalHappierJsonCommand,
+  runLocalHappierJsonCommandResult,
+} from './happierCli.js';
 
 export type ActiveRelayProfile = Readonly<{
   serverUrl: string;
@@ -60,17 +65,35 @@ export async function readActiveRelayProfile(): Promise<ActiveRelayProfile> {
 }
 
 export async function readAuthStatus(): Promise<AuthStatusSnapshot> {
-  const parsed = await runLocalHappierJsonCommand({
-    args: ['auth', 'status', '--json'],
-    allowJsonFailure: true,
-  });
+  const args = ['auth', 'status', '--json'] as const;
+  const result = await runLocalHappierJsonCommandResult({ args });
+
+  // `happier auth status --json` reports a missing session as a structured envelope on
+  // stdout with a nonzero exit code, so the exit status alone cannot decide the outcome.
+  // Only that exact envelope may be accepted; any other nonzero result stays fatal, which
+  // matches the remote bootstrap path.
+  if (result.status !== 0) {
+    const failure = classifyAuthStatusFailureEnvelope(result.parsed);
+    if (failure?.outcome !== 'notAuthenticated') {
+      throw createLocalHappierCommandFailure({
+        args,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      });
+    }
+    return {
+      authenticated: false,
+      machineId: null,
+    };
+  }
+
+  const parsed = result.parsed;
   if (!parsed || typeof parsed !== 'object') {
     throw new systemTasks.SystemTaskExecutionError('invalid_cli_response', 'Received an invalid auth status response.');
   }
 
   const record = parsed as {
     ok?: boolean;
-    error?: { code?: unknown };
     data?: {
       authenticated?: unknown;
       machineId?: unknown;
@@ -78,17 +101,14 @@ export async function readAuthStatus(): Promise<AuthStatusSnapshot> {
   };
 
   if (record.ok === false) {
-    const errorCode = typeof record.error?.code === 'string' ? record.error.code.trim() : '';
-    if (errorCode === 'not_authenticated') {
+    const failure = classifyAuthStatusFailureEnvelope(parsed);
+    if (failure?.outcome === 'notAuthenticated') {
       return {
         authenticated: false,
         machineId: null,
       };
     }
-    throw new systemTasks.SystemTaskExecutionError(
-      errorCode || 'auth_status_unavailable',
-      'Could not determine authentication status for the selected Relay.',
-    );
+    throw createAuthStatusUnavailableError(failure?.outcome === 'unavailable' ? failure.errorCode : '');
   }
 
   return {

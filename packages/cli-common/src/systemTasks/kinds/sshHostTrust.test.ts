@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveSshKnownHostTrust } from './sshHostTrust.js';
+import { resolveSshKnownHostsHostToken, resolveSshKnownHostTrust } from './sshHostTrust.js';
 
 const SCANNED_HOST_KEY = 'example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
 const DIFFERENT_HOST_KEY = 'example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
@@ -36,5 +36,29 @@ describe('resolveSshKnownHostTrust', () => {
       }),
       nextKnownHostsText: SCANNED_HOST_KEY,
     });
+  });
+});
+
+describe('resolveSshKnownHostsHostToken', () => {
+  it('derives the known_hosts token from the requested target so a rewritten address cannot be trusted implicitly', () => {
+    expect(resolveSshKnownHostsHostToken({ target: 'cuihuiai@cuihuis-mac-mini' })).toBe('cuihuis-mac-mini');
+    expect(resolveSshKnownHostsHostToken({ target: 'cuihuis-mac-mini', port: 22 })).toBe('cuihuis-mac-mini');
+    expect(resolveSshKnownHostsHostToken({ target: 'dev@example.test', port: 2222 })).toBe('[example.test]:2222');
+    expect(resolveSshKnownHostsHostToken({ target: '   ' })).toBe('');
+  });
+
+  it('does not match a known_hosts entry stored under the resolved address', () => {
+    const token = resolveSshKnownHostsHostToken({ target: 'cuihuiai@cuihuis-mac-mini' });
+    const addressKeyedEntry = `100.85.17.39 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB`;
+
+    const trust = resolveSshKnownHostTrust({
+      knownHostsText: `${addressKeyedEntry}\n`,
+      scannedHostKeyLine: `${token} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB`,
+    });
+
+    expect(trust.status).toBe('prompt');
+    if (trust.status !== 'prompt') throw new Error('expected a trust prompt');
+    expect(trust.promptKind).toBe('ssh.trustHost');
+    expect(trust.scanned.host).toBe(token);
   });
 });

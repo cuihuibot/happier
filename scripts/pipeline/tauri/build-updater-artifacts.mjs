@@ -10,6 +10,7 @@ import { ensureTauriSigningKeyFile } from './ensure-signing-key-file.mjs';
 import { resolveTauriSigningPrivateKeyPassword } from './resolve-signing-key-password.mjs';
 import { resolveYarnInvocation } from './resolve-yarn-invocation.mjs';
 import { formatPublicReleaseChannelChoices, normalizePublicReleaseChannel } from '../release/lib/public-release-rings.mjs';
+import { BUN_STANDALONE_ENTITLEMENTS_PATH } from '../release/bun-standalone-entitlements.mjs';
 import { execFileSyncPortable } from '../lib/exec-file-sync-portable.mjs';
 import { applyExpoWebModalEnv } from '../expo/expoWebModalEnv.mjs';
 
@@ -123,6 +124,29 @@ export function resolveLinuxHsetupResourcesOverrideConfig() {
       externalBin: [],
       // Include the gzip sidecar produced by `build.rs` as a normal bundle resource instead.
       resources: ['binaries/hsetup-*.gz'],
+    },
+  };
+}
+
+/**
+ * macOS bundle signing configuration for the Desktop app and its nested binaries.
+ *
+ * Tauri passes `bundle.macOS.entitlements` to `codesign` for every executable
+ * sign target, including the `hsetup` sidecar. The sidecar is a Bun-compiled
+ * binary, so a hardened-runtime signature without the shared Bun JIT
+ * entitlements makes it abort while allocating executable memory.
+ *
+ * @param {{ signingIdentity: string }} opts
+ * @returns {{ bundle: { macOS: { signingIdentity: string; hardenedRuntime: boolean; entitlements: string } } }}
+ */
+export function resolveMacosCodesignOverrideConfig(opts) {
+  return {
+    bundle: {
+      macOS: {
+        signingIdentity: String(opts.signingIdentity ?? '').trim(),
+        hardenedRuntime: true,
+        entitlements: BUN_STANDALONE_ENTITLEMENTS_PATH,
+      },
     },
   };
 }
@@ -506,7 +530,7 @@ function main() {
     if (opts.dryRun) {
       console.log(`[dry-run] write ${codesignOverride} (macOS signingIdentity=${appleSigningIdentity})`);
     } else {
-      const payload = { bundle: { macOS: { signingIdentity: appleSigningIdentity, hardenedRuntime: true } } };
+      const payload = resolveMacosCodesignOverrideConfig({ signingIdentity: appleSigningIdentity });
       fs.writeFileSync(codesignOverride, `${JSON.stringify(payload)}\n`, 'utf8');
     }
     configs.push('--config', codesignOverride);

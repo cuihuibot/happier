@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 
+import { extractSshTargetHost } from '@happier-dev/cli-common/systemTasks';
+
 export interface CommandExecutionResult {
   status: number;
   stdout: string;
@@ -88,9 +90,7 @@ export function resolveDefaultKnownHostsPath(): string {
 }
 
 export function extractSshHost(target: string): string {
-  const trimmed = String(target ?? '').trim();
-  const atIndex = trimmed.lastIndexOf('@');
-  return atIndex >= 0 ? trimmed.slice(atIndex + 1) : trimmed;
+  return extractSshTargetHost(target);
 }
 
 export function computeSshFingerprintFromKnownHostsLine(line: string): string {
