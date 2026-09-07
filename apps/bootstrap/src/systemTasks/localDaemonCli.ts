@@ -1,6 +1,10 @@
 import { systemTasks } from '@happier-dev/cli-common';
 
-import { classifyAuthStatusFailureEnvelope, createAuthStatusUnavailableError } from './authStatusEnvelope.js';
+import {
+  classifyAuthStatusFailureEnvelope,
+  createAuthStatusUnavailableError,
+  parseAuthStatusSuccessEnvelope,
+} from './authStatusEnvelope.js';
 import {
   createLocalHappierCommandFailure,
   runLocalHappierJsonCommand,
@@ -87,21 +91,8 @@ export async function readAuthStatus(): Promise<AuthStatusSnapshot> {
     };
   }
 
-  const parsed = result.parsed;
-  if (!parsed || typeof parsed !== 'object') {
-    throw new systemTasks.SystemTaskExecutionError('invalid_cli_response', 'Received an invalid auth status response.');
-  }
-
-  const record = parsed as {
-    ok?: boolean;
-    data?: {
-      authenticated?: unknown;
-      machineId?: unknown;
-    };
-  };
-
-  if (record.ok === false) {
-    const failure = classifyAuthStatusFailureEnvelope(parsed);
+  if (result.parsed && typeof result.parsed === 'object' && !Array.isArray(result.parsed) && (result.parsed as { ok?: unknown }).ok === false) {
+    const failure = classifyAuthStatusFailureEnvelope(result.parsed);
     if (failure?.outcome === 'notAuthenticated') {
       return {
         authenticated: false,
@@ -111,12 +102,11 @@ export async function readAuthStatus(): Promise<AuthStatusSnapshot> {
     throw createAuthStatusUnavailableError(failure?.outcome === 'unavailable' ? failure.errorCode : '');
   }
 
-  return {
-    authenticated: record.data?.authenticated === true,
-    machineId: typeof record.data?.machineId === 'string' && record.data.machineId.trim()
-      ? record.data.machineId.trim()
-      : null,
-  };
+  const success = parseAuthStatusSuccessEnvelope(result.parsed);
+  if (!success) {
+    throw new systemTasks.SystemTaskExecutionError('invalid_cli_response', 'Received an invalid auth status response.');
+  }
+  return success;
 }
 
 export async function configureRelay(profile: ActiveRelayProfile): Promise<void> {

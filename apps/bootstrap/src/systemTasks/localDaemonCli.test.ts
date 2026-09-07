@@ -39,7 +39,7 @@ describe('readAuthStatus', () => {
   it('reports the authenticated machine when the CLI exits zero with a success envelope', async () => {
     runCommandCaptureMock.mockResolvedValue(cliResult({
       status: 0,
-      stdout: '{"ok":true,"data":{"authenticated":true,"machineId":" machine-1 "}}\n',
+      stdout: '{"ok":true,"kind":"auth_status","data":{"authenticated":true,"machineId":" machine-1 "}}\n',
     }));
 
     await expect(readAuthStatus()).resolves.toEqual({
@@ -112,5 +112,19 @@ describe('readAuthStatus', () => {
     await expect(readAuthStatus()).rejects.toMatchObject({
       code: 'invalid_cli_response',
     });
+  });
+
+  it('rejects zero-exit auth responses without an explicit boolean authenticated value', async () => {
+    for (const stdout of [
+      '{}\n',
+      '{"ok":true,"kind":"server_configure","data":{}}\n',
+      '{"ok":true,"kind":"auth_status","data":{}}\n',
+      '{"ok":true,"kind":"auth_status","data":{"authenticated":"yes"}}\n',
+    ]) {
+      runCommandCaptureMock.mockResolvedValue(cliResult({ status: 0, stdout }));
+      await expect(readAuthStatus()).rejects.toMatchObject({
+        code: 'invalid_cli_response',
+      });
+    }
   });
 });

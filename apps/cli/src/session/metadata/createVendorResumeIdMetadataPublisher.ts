@@ -87,6 +87,9 @@ export function createVendorResumeIdMetadataPublisher(params: Readonly<{
       return;
     }
 
+    if (deferred && event.generation >= deferred.generation) {
+      deferred = null;
+    }
     await writeBound(event, vendorSessionId);
   };
 

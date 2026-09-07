@@ -170,7 +170,9 @@ describe('resolveRemoteSshHostTrustDefault', () => {
         const knownHostsPath = join(tempDir, 'known_hosts');
         const aliasHostKey = 'cuihuis-mac-mini ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
         const fakeKeyscan = createFakeSshKeyscan({ stdout: `${aliasHostKey}\n` });
-        const fakeSsh = createFakeSsh({ outputs: [{ status: 0, stdout: '{"ok":true,"data":{}}' }] });
+        const fakeSsh = createFakeSsh({
+            outputs: [{ status: 0, stdout: '{"ok":true,"kind":"auth_status","data":{"authenticated":false}}' }],
+        });
 
         try {
             await withPatchedPath(fakeKeyscan.binDir, async () => {
@@ -336,15 +338,7 @@ describe('runRemoteBootstrapCommandDefault', () => {
             outputs: [
                 {
                     status: 0,
-                    stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n`,
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-                {
-                    status: 0,
-                    stdout: `${JSON.stringify({ ok: true, data: { authenticated: false } })}\n`,
+                    stdout: `${JSON.stringify({ ok: true, kind: 'auth_status', data: { authenticated: false } })}\n`,
                 },
             ],
         });
@@ -422,6 +416,34 @@ describe('runRemoteBootstrapCommandDefault', () => {
         for (const scenario of scenarios) {
             const fakeSsh = createFakeSsh({
                 outputs: [{ status: scenario.status, stdout: scenario.stdout, stderr: scenario.stderr }],
+            });
+            try {
+                await withPatchedPath(fakeSsh.binDir, async () => {
+                    await expect(runRemoteBootstrapCommandDefault({
+                        label: 'auth.status',
+                        parsed: createParsedRemoteBootstrapParams(),
+                        auth: { mode: 'agent' },
+                        knownHostsMode: 'system',
+                    })).rejects.toThrow();
+                });
+            } finally {
+                fakeSsh.cleanup();
+            }
+        }
+    });
+
+    it('stays fail-closed for zero-exit auth.status output without an explicit success envelope', async () => {
+        const scenarios = [
+            '',
+            '{}\n',
+            `${JSON.stringify({ ok: true, kind: 'server_configure', data: {} })}\n`,
+            `${JSON.stringify({ ok: true, kind: 'auth_status', data: {} })}\n`,
+            `${JSON.stringify({ ok: true, kind: 'auth_status', data: { authenticated: 'yes' } })}\n`,
+        ];
+
+        for (const stdout of scenarios) {
+            const fakeSsh = createFakeSsh({
+                outputs: [{ status: 0, stdout }],
             });
             try {
                 await withPatchedPath(fakeSsh.binDir, async () => {

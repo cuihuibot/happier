@@ -7,7 +7,11 @@ import {
   SystemTaskSshConnectionConfig,
 } from '@happier-dev/cli-common/systemTasks';
 
-import { classifyAuthStatusFailureEnvelope, createAuthStatusUnavailableError } from './authStatusEnvelope.js';
+import {
+  classifyAuthStatusFailureEnvelope,
+  createAuthStatusUnavailableError,
+  parseAuthStatusSuccessEnvelope,
+} from './authStatusEnvelope.js';
 import { runLocalHappierJsonCommand } from './happierCli.js';
 import { buildSshCommand, redactSshText } from '../ssh/index.js';
 import { extractSshHost, normalizeBootstrapChannel, parseFirstJsonObject, resolveDefaultKnownHostsPath, runCommandCapture } from './taskRuntime.js';
@@ -251,8 +255,7 @@ async function readRemoteAuthStatus(
     return { ok: true, data: { authenticated: false } };
   }
 
-  const envelope = parsed as null | Readonly<{ ok?: boolean; data?: Record<string, unknown> }>;
-  if (envelope?.ok === false) {
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (parsed as { ok?: unknown }).ok === false) {
     const failure = classifyAuthStatusFailureEnvelope(parsed);
     if (failure?.outcome !== 'notAuthenticated') {
       throw createAuthStatusUnavailableError(failure?.outcome === 'unavailable' ? failure.errorCode : '');
@@ -260,10 +263,11 @@ async function readRemoteAuthStatus(
     return { ok: true, data: { authenticated: false } };
   }
 
-  return {
-    ok: true,
-    data: envelope?.data && typeof envelope.data === 'object' ? envelope.data : {},
-  };
+  const success = parseAuthStatusSuccessEnvelope(parsed);
+  if (!success) {
+    throw createAuthStatusUnavailableError('');
+  }
+  return { ok: true, data: success };
 }
 
 async function runRemoteJson(

@@ -309,6 +309,59 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
     }
   });
 
+  it('reresolves a changed ssh config endpoint for each setup run', async () => {
+    let resolvedPort = '50977';
+    const baseSpawnSync = spawnSync.getMockImplementation();
+    spawnSync.mockImplementation((command: string, args: readonly string[] = []) => {
+      if (command === 'ssh' && args.includes('-G')) {
+        return {
+          status: 0,
+          stdout: `hostname 127.0.0.1\nport ${resolvedPort}\nuser leeroy\n`,
+          stderr: '',
+        };
+      }
+      if (command === 'ssh-keyscan') {
+        return {
+          status: 0,
+          stdout: `[127.0.0.1]:${resolvedPort} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n`,
+          stderr: '',
+        };
+      }
+      return baseSpawnSync?.(command, args);
+    });
+
+    const kind = createLiveRemoteSshBootstrapTaskKind();
+    const run = () => kind.run({
+      params: {
+        ssh: {
+          target: 'lima-happier-wsrepl-qa-local',
+          auth: 'agent' as const,
+          sshConfigFile: '/tmp/lima-ssh.config',
+        },
+        relay: {
+          relayUrl: 'https://relay.example.test',
+        },
+        channel: 'preview' as const,
+        serviceMode: 'none' as const,
+      },
+      emit: () => undefined,
+      prompt: async (request) => {
+        if (request.kind === 'auth.approveRemoteProvisioning') return { approved: true };
+        if (request.kind === 'ssh.trustHost' || request.kind === 'ssh.replaceHostKey') return { trusted: true };
+        throw new Error(`Unexpected prompt: ${request.kind}`);
+      },
+    });
+
+    await run();
+    resolvedPort = '50978';
+    await run();
+
+    const keyscanPorts = spawnSync.mock.calls
+      .filter(([command]) => command === 'ssh-keyscan')
+      .map(([, args]) => (args as readonly string[])[3]);
+    expect(keyscanPorts).toEqual(['50977', '50978']);
+  });
+
   it('installs the remote CLI from the verified payload path instead of curl-bash', async () => {
     const kind = createLiveRemoteSshBootstrapTaskKind();
 
