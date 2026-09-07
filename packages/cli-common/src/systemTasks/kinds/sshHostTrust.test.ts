@@ -44,6 +44,7 @@ describe('resolveSshKnownHostsHostToken', () => {
     expect(resolveSshKnownHostsHostToken({ target: 'cuihuiai@cuihuis-mac-mini' })).toBe('cuihuis-mac-mini');
     expect(resolveSshKnownHostsHostToken({ target: 'cuihuis-mac-mini', port: 22 })).toBe('cuihuis-mac-mini');
     expect(resolveSshKnownHostsHostToken({ target: 'dev@example.test', port: 2222 })).toBe('[example.test]:2222');
+    expect(resolveSshKnownHostsHostToken({ target: 'dev@[2001:db8::1]', port: 2222 })).toBe('[2001:db8::1]:2222');
     expect(resolveSshKnownHostsHostToken({ target: '   ' })).toBe('');
   });
 

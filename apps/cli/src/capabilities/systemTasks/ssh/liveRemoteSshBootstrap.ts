@@ -145,34 +145,6 @@ function resolveSshEndpoint(params: Readonly<{
   };
 }
 
-const sshEndpointCache = new Map<string, Readonly<{ host: string; port?: number }>>();
-
-function sshEndpointCacheKey(ssh: SystemTaskSshConnectionConfig): string {
-  return [
-    String(ssh.target ?? ''),
-    String(normalizeSshPort(ssh.port) ?? ''),
-    String(ssh.sshConfigFile ?? '').trim(),
-  ].join('\u0000');
-}
-
-/**
- * Memoizes `ssh -G` resolution, which is a deterministic local lookup for a given
- * target/port/config triple and is otherwise re-spawned for every transport invocation.
- */
-function resolveCachedSshEndpoint(ssh: SystemTaskSshConnectionConfig): Readonly<{ host: string; port?: number }> {
-  if (!String(ssh.sshConfigFile ?? '').trim()) {
-    return resolveSshEndpoint({ ssh });
-  }
-  const cacheKey = sshEndpointCacheKey(ssh);
-  const cached = sshEndpointCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const endpoint = resolveSshEndpoint({ ssh });
-  sshEndpointCache.set(cacheKey, endpoint);
-  return endpoint;
-}
-
 /**
  * The single canonical `known_hosts` token for a connection.
  *
@@ -182,7 +154,7 @@ function resolveCachedSshEndpoint(ssh: SystemTaskSshConnectionConfig): Readonly<
  * token, otherwise the trust step accepts one token and verification checks another.
  */
 function resolveSshKnownHostsToken(ssh: SystemTaskSshConnectionConfig): string {
-  const endpoint = resolveCachedSshEndpoint(ssh);
+  const endpoint = resolveSshEndpoint({ ssh });
   return resolveSshKnownHostsHostToken({ target: endpoint.host, port: endpoint.port });
 }
 
@@ -541,7 +513,7 @@ export function createLiveRemoteSshBootstrapTaskKind() {
 
       const knownHostsPath = resolveKnownHostsPath(ssh, knownHostsMode);
       const existingKnownHostsText = readKnownHostsText(knownHostsPath);
-      const parsedTarget = resolveCachedSshEndpoint(ssh);
+      const parsedTarget = resolveSshEndpoint({ ssh });
       const knownHostsToken = resolveSshKnownHostsHostToken({
         target: parsedTarget.host,
         port: parsedTarget.port,

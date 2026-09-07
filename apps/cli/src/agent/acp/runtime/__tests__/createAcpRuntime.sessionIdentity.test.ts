@@ -339,4 +339,27 @@ describe('createAcpRuntime session identity', () => {
       vendorSessionId: 'created-1',
     });
   });
+
+  it('does not confirm vendor session durability after an explicit cancellation', async () => {
+    const confirmVendorSessionDurable = vi.fn(async () => {});
+    const backend = {
+      startSession: async () => ({ sessionId: 'created-1' }),
+      sendPrompt: async () => {},
+      cancel: async () => {},
+      onMessage: () => {},
+      dispose: async () => {},
+    } satisfies AcpRuntimeBackend;
+    const runtime = createRuntime({
+      backend,
+      persistBound: async () => {},
+      confirmVendorSessionDurable,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+    await runtime.cancel();
+    await runtime.flushTurn();
+
+    expect(confirmVendorSessionDurable).not.toHaveBeenCalled();
+  });
 });

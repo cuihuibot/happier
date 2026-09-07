@@ -269,6 +269,28 @@ describe('createVendorResumeIdMetadataPublisher', () => {
       expect(metadata).toEqual(createTestMetadata({ copilotSessionId: 'copilot-new' }));
     });
 
+    it('does not let a late deferred confirmation overwrite a newer resumed identity', async () => {
+      let metadata = createTestMetadata();
+      const publisher = createVendorResumeIdMetadataPublisher({
+        agentId: 'copilot',
+        getMetadataSnapshot: () => metadata,
+        updateMetadata: async (updater) => { metadata = updater(metadata); },
+      });
+
+      await publisher.persistBound({ generation: 0, operation: 'create', vendorSessionId: 'copilot-old' });
+      await publisher.persistBound({
+        generation: 1,
+        operation: 'resume',
+        vendorSessionId: 'copilot-new',
+      });
+      await publisher.confirmVendorSessionDurable({
+        generation: 0,
+        vendorSessionId: 'copilot-old',
+      });
+
+      expect(metadata).toEqual(createTestMetadata({ copilotSessionId: 'copilot-new' }));
+    });
+
     it('publishes a resumed Copilot identity immediately because the vendor session is already durable', async () => {
       const updateMetadata = vi.fn(async () => {});
       const publisher = createVendorResumeIdMetadataPublisher({

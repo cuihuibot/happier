@@ -145,10 +145,33 @@ export function resolveMacosCodesignOverrideConfig(opts) {
       macOS: {
         signingIdentity: String(opts.signingIdentity ?? '').trim(),
         hardenedRuntime: true,
-        entitlements: BUN_STANDALONE_ENTITLEMENTS_PATH,
       },
     },
   };
+}
+
+export function createMacosCodesignWrapper({ dir }) {
+  const wrapperPath = path.join(dir, 'codesign');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(wrapperPath, `#!/bin/sh
+set -eu
+real_codesign="\${HAPPIER_REAL_CODESIGN_PATH:-/usr/bin/codesign}"
+target=""
+is_signing=false
+has_entitlements=false
+for argument in "$@"; do
+  target="$argument"
+  case "$argument" in
+    -s|--sign) is_signing=true ;;
+    --entitlements) has_entitlements=true ;;
+  esac
+done
+if [ "$is_signing" = true ] && [ "$has_entitlements" = false ] && [ "\${target##*/}" = "hsetup" ]; then
+  exec "$real_codesign" --entitlements "$HAPPIER_BUN_ENTITLEMENTS_PATH" "$@"
+fi
+exec "$real_codesign" "$@"
+`, { mode: 0o755 });
+  return wrapperPath;
 }
 
 /**
@@ -525,6 +548,7 @@ function main() {
   }
 
   const appleSigningIdentity = String(process.env.APPLE_SIGNING_IDENTITY ?? '').trim();
+  let macosCodesignWrapperDir = '';
   if (process.platform === 'darwin' && appleSigningIdentity) {
     const codesignOverride = tempFile(tmpRoot, 'tauri.codesign.override.json');
     if (opts.dryRun) {
@@ -534,6 +558,10 @@ function main() {
       fs.writeFileSync(codesignOverride, `${JSON.stringify(payload)}\n`, 'utf8');
     }
     configs.push('--config', codesignOverride);
+    macosCodesignWrapperDir = tempFile(tmpRoot, `happier-codesign-${process.pid}`);
+    if (!opts.dryRun) {
+      createMacosCodesignWrapper({ dir: macosCodesignWrapperDir });
+    }
   }
 
   const baseTauriEnv = applyExpoWebModalEnv({
@@ -542,6 +570,12 @@ function main() {
     ...(process.platform === 'linux' ? resolveLinuxTauriBundlerEnvOverrides(process.env) : {}),
     ...(signingKeyPath ? { TAURI_SIGNING_PRIVATE_KEY: signingKeyPath } : {}),
     ...(signingKeyPassword ? { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: signingKeyPassword } : {}),
+    ...(macosCodesignWrapperDir
+      ? {
+          PATH: `${macosCodesignWrapperDir}${path.delimiter}${process.env.PATH ?? ''}`,
+          HAPPIER_BUN_ENTITLEMENTS_PATH: BUN_STANDALONE_ENTITLEMENTS_PATH,
+        }
+      : {}),
   });
 
   // Build the frontend assets once, outside of Tauri's internal beforeBuild hook.

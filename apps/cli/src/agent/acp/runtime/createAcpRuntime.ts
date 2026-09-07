@@ -2221,6 +2221,9 @@ export function createAcpRuntime(params: {
 
     async cancel(): Promise<void> {
       if (!sessionId) return;
+      if (turnInFlight) {
+        turnAborted = true;
+      }
       await streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'cancelled' });
       const b = await ensureBackend();
       try {

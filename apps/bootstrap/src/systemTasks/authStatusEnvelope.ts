@@ -26,6 +26,27 @@ export function classifyAuthStatusFailureEnvelope(parsed: unknown): AuthStatusFa
     : { outcome: 'unavailable', errorCode };
 }
 
+export function parseAuthStatusSuccessEnvelope(parsed: unknown): Readonly<{
+  authenticated: boolean;
+  machineId: string | null;
+}> | null {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null;
+  }
+  const record = parsed as Readonly<{ ok?: unknown; kind?: unknown; data?: unknown }>;
+  if (record.ok !== true || record.kind !== 'auth_status' || !record.data || typeof record.data !== 'object' || Array.isArray(record.data)) {
+    return null;
+  }
+  const data = record.data as Readonly<{ authenticated?: unknown; machineId?: unknown }>;
+  if (typeof data.authenticated !== 'boolean') {
+    return null;
+  }
+  return {
+    authenticated: data.authenticated,
+    machineId: typeof data.machineId === 'string' && data.machineId.trim() ? data.machineId.trim() : null,
+  };
+}
+
 export function createAuthStatusUnavailableError(errorCode: string): Error {
   return new systemTasks.SystemTaskExecutionError(
     errorCode || 'auth_status_unavailable',

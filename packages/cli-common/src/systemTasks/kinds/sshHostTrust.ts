@@ -57,7 +57,10 @@ export function resolveSshKnownHostsHostToken(params: Readonly<{
   target: string;
   port?: number;
 }>): string {
-  const host = extractSshTargetHost(params.target);
+  const extractedHost = extractSshTargetHost(params.target);
+  const host = extractedHost.startsWith('[') && extractedHost.endsWith(']')
+    ? extractedHost.slice(1, -1)
+    : extractedHost;
   if (!host) {
     return '';
   }
