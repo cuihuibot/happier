@@ -435,7 +435,15 @@ export const AGENTS_CORE = {
         flavorAliases: ['github-copilot', 'copilot-cli'],
         cloudConnect: null,
         connectedServices: null,
-        resume: { vendorResume: 'supported', vendorResumeIdField: 'copilotSessionId' },
+        resume: {
+            vendorResume: 'supported',
+            vendorResumeIdField: 'copilotSessionId',
+            // Copilot mints the session id at `session/new` but only writes a
+            // loadable session once the first turn is persisted. Publishing the
+            // id earlier records a resume target that both ACP `session/load`
+            // and native `copilot --resume` reject with "session not found".
+            vendorResumeIdDurability: 'after-first-persisted-turn',
+        },
         sessionStorage: { direct: false, persisted: true },
         sessionCapabilities: {
             sessionListing: 'unsupported',

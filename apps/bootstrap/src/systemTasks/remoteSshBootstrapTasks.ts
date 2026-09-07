@@ -7,6 +7,7 @@ import {
   SystemTaskSshConnectionConfig,
 } from '@happier-dev/cli-common/systemTasks';
 
+import { classifyAuthStatusFailureEnvelope, createAuthStatusUnavailableError } from './authStatusEnvelope.js';
 import { runLocalHappierJsonCommand } from './happierCli.js';
 import { buildSshCommand, redactSshText } from '../ssh/index.js';
 import { extractSshHost, normalizeBootstrapChannel, parseFirstJsonObject, resolveDefaultKnownHostsPath, runCommandCapture } from './taskRuntime.js';
@@ -207,24 +208,14 @@ export async function runRemoteBootstrapCommandDefault(params: Readonly<{
     };
   }
 
+  if (params.label === 'auth.status') {
+    return await readRemoteAuthStatus(ssh, command, params.knownHostsMode);
+  }
+
   const result = await runRemoteJson(ssh, command, params.knownHostsMode) as null | Readonly<{
     ok?: boolean;
     data?: Record<string, unknown>;
   }>;
-  if (params.label === 'auth.status') {
-    if (result?.ok === false) {
-      return {
-        ok: true,
-        data: { authenticated: false },
-      };
-    }
-    if (result?.data && typeof result.data === 'object') {
-      return {
-        ok: true,
-        data: result.data,
-      };
-    }
-  }
 
   if (result?.data && typeof result.data === 'object') {
     return {
@@ -239,6 +230,42 @@ export async function runRemoteBootstrapCommandDefault(params: Readonly<{
   };
 }
 
+/**
+ * `happier auth status --json` reports a missing session as a structured envelope on stdout
+ * with a nonzero exit code, so the exit status alone cannot decide the outcome. Only an
+ * explicit `not_authenticated` envelope is accepted; every other nonzero result stays fatal.
+ */
+async function readRemoteAuthStatus(
+  ssh: SshConnectionConfig,
+  remoteCommand: string,
+  knownHostsMode: 'app' | 'system',
+): Promise<Readonly<{ ok: boolean; data: Record<string, unknown> }>> {
+  const result = await captureRemoteText(ssh, remoteCommand, knownHostsMode);
+  const parsed = parseFirstJsonObject(result.stdout);
+
+  if (result.status !== 0) {
+    const failure = classifyAuthStatusFailureEnvelope(parsed);
+    if (failure?.outcome !== 'notAuthenticated') {
+      throw remoteCommandFailure(ssh, result);
+    }
+    return { ok: true, data: { authenticated: false } };
+  }
+
+  const envelope = parsed as null | Readonly<{ ok?: boolean; data?: Record<string, unknown> }>;
+  if (envelope?.ok === false) {
+    const failure = classifyAuthStatusFailureEnvelope(parsed);
+    if (failure?.outcome !== 'notAuthenticated') {
+      throw createAuthStatusUnavailableError(failure?.outcome === 'unavailable' ? failure.errorCode : '');
+    }
+    return { ok: true, data: { authenticated: false } };
+  }
+
+  return {
+    ok: true,
+    data: envelope?.data && typeof envelope.data === 'object' ? envelope.data : {},
+  };
+}
+
 async function runRemoteJson(
   ssh: SshConnectionConfig,
   remoteCommand: string,
@@ -248,7 +275,7 @@ async function runRemoteJson(
   return parseFirstJsonObject(result.stdout);
 }
 
-async function runRemoteText(
+async function captureRemoteText(
   ssh: SshConnectionConfig,
   remoteCommand: string,
   knownHostsMode: 'app' | 'system',
@@ -265,12 +292,27 @@ async function runRemoteText(
       : { mode: 'system' },
     remoteCommand,
   });
-  const result = await runCommandCapture({
+  return runCommandCapture({
     command: invocation.command,
     args: invocation.args,
   });
+}
+
+function remoteCommandFailure(
+  ssh: SshConnectionConfig,
+  result: Readonly<{ stdout: string; stderr: string }>,
+): Error {
+  return new Error(redactSshText(result.stderr || result.stdout || `SSH command failed for ${ssh.target}.`));
+}
+
+async function runRemoteText(
+  ssh: SshConnectionConfig,
+  remoteCommand: string,
+  knownHostsMode: 'app' | 'system',
+): Promise<Readonly<{ status: number; stdout: string; stderr: string }>> {
+  const result = await captureRemoteText(ssh, remoteCommand, knownHostsMode);
   if (result.status !== 0) {
-    throw new Error(redactSshText(result.stderr || result.stdout || `SSH command failed for ${ssh.target}.`));
+    throw remoteCommandFailure(ssh, result);
   }
   return result;
 }

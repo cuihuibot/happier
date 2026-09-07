@@ -163,6 +163,53 @@ function createParsedRemoteBootstrapParams(channel: 'stable' | 'preview' | 'dev'
 }
 
 describe('resolveRemoteSshHostTrustDefault', () => {
+    it('pins the next SSH invocation to the exact host token the accepted trust persisted', async () => {
+        // Reproduces the live blocker: `ssh-keyscan` ignores ~/.ssh/config and persists the alias
+        // token, while the follow-up ssh honours `HostName` and verifies the rewritten address.
+        const tempDir = mkdtempSync(join(tmpdir(), 'hsetup-known-hosts-alias-'));
+        const knownHostsPath = join(tempDir, 'known_hosts');
+        const aliasHostKey = 'cuihuis-mac-mini ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+        const fakeKeyscan = createFakeSshKeyscan({ stdout: `${aliasHostKey}\n` });
+        const fakeSsh = createFakeSsh({ outputs: [{ status: 0, stdout: '{"ok":true,"data":{}}' }] });
+
+        try {
+            await withPatchedPath(fakeKeyscan.binDir, async () => {
+                const resolution = await resolveRemoteSshHostTrustDefault({
+                    ssh: { target: 'cuihuiai@cuihuis-mac-mini', auth: 'agent', knownHostsPath },
+                    knownHostsMode: 'app',
+                });
+                if (resolution.status !== 'prompt') {
+                    throw new Error('Expected an SSH trust prompt.');
+                }
+                await resolution.accept();
+            });
+
+            const persistedHostToken = readFileSync(knownHostsPath, 'utf8').trim().split(/\s+/u)[0];
+            expect(persistedHostToken).toBe('cuihuis-mac-mini');
+
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                await runRemoteBootstrapCommandDefault({
+                    label: 'auth.status',
+                    parsed: {
+                        ...createParsedRemoteBootstrapParams(),
+                        ssh: { target: 'cuihuiai@cuihuis-mac-mini', auth: 'agent', knownHostsPath },
+                    },
+                    auth: { mode: 'agent' },
+                    knownHostsMode: 'app',
+                });
+            });
+
+            const args = fakeSsh.readInvocations()[0] ?? [];
+            expect(args).toContain(`UserKnownHostsFile=${knownHostsPath}`);
+            expect(args).toContain('StrictHostKeyChecking=yes');
+            expect(args).toContain(`HostKeyAlias=${persistedHostToken}`);
+        } finally {
+            fakeSsh.cleanup();
+            fakeKeyscan.cleanup();
+            rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
     it('prompts to replace a mismatched persisted host key instead of trusting the host implicitly', async () => {
         const tempDir = mkdtempSync(join(tmpdir(), 'hsetup-known-hosts-'));
         const knownHostsPath = join(tempDir, 'known_hosts');
@@ -315,6 +362,101 @@ describe('runRemoteBootstrapCommandDefault', () => {
             const remoteCommand = fakeSsh.readInvocations().at(-1)?.at(-1) ?? '';
             expect(remoteCommand).toContain('$HOME/.happier/cli-preview/current/happier auth status --json');
             expect(remoteCommand).not.toContain('$HOME/.happier/bin/happier');
+        } finally {
+            fakeSsh.cleanup();
+        }
+    });
+
+    it('reads the structured not_authenticated auth.status envelope even though the remote command exits nonzero', async () => {
+        // `happier auth status --json` prints the envelope on stdout and exits 1 when unauthenticated.
+        const fakeSsh = createFakeSsh({
+            outputs: [
+                {
+                    status: 1,
+                    stdout: `${JSON.stringify({ v: 1, ok: false, kind: 'auth_status', error: { code: 'not_authenticated' } })}\n`,
+                },
+            ],
+        });
+
+        try {
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                const result = await runRemoteBootstrapCommandDefault({
+                    label: 'auth.status',
+                    parsed: createParsedRemoteBootstrapParams(),
+                    auth: { mode: 'agent' },
+                    knownHostsMode: 'system',
+                });
+
+                expect(result).toEqual({ ok: true, data: { authenticated: false } });
+            });
+        } finally {
+            fakeSsh.cleanup();
+        }
+    });
+
+    it('stays fail-closed for auth.status when a nonzero exit is not an explicit not_authenticated envelope', async () => {
+        const scenarios: readonly Readonly<{ name: string; status: number; stdout: string; stderr?: string }>[] = [
+            {
+                name: 'ssh transport failure',
+                status: 255,
+                stdout: '',
+                stderr: 'Host key verification failed.\n',
+            },
+            {
+                name: 'malformed stdout',
+                status: 1,
+                stdout: 'not json at all\n',
+            },
+            {
+                name: 'unexpected error code',
+                status: 1,
+                stdout: `${JSON.stringify({ v: 1, ok: false, kind: 'auth_status', error: { code: 'auth_unavailable' } })}\n`,
+            },
+            {
+                name: 'different envelope kind',
+                status: 1,
+                stdout: `${JSON.stringify({ v: 1, ok: false, kind: 'server_configure', error: { code: 'not_authenticated' } })}\n`,
+            },
+        ];
+
+        for (const scenario of scenarios) {
+            const fakeSsh = createFakeSsh({
+                outputs: [{ status: scenario.status, stdout: scenario.stdout, stderr: scenario.stderr }],
+            });
+            try {
+                await withPatchedPath(fakeSsh.binDir, async () => {
+                    await expect(runRemoteBootstrapCommandDefault({
+                        label: 'auth.status',
+                        parsed: createParsedRemoteBootstrapParams(),
+                        auth: { mode: 'agent' },
+                        knownHostsMode: 'system',
+                    })).rejects.toThrow();
+                });
+            } finally {
+                fakeSsh.cleanup();
+            }
+        }
+    });
+
+    it('keeps other bootstrap labels fail-closed on a nonzero remote exit even with parseable stdout', async () => {
+        const fakeSsh = createFakeSsh({
+            outputs: [
+                {
+                    status: 1,
+                    stdout: `${JSON.stringify({ v: 1, ok: false, kind: 'auth_status', error: { code: 'not_authenticated' } })}\n`,
+                },
+            ],
+        });
+
+        try {
+            await withPatchedPath(fakeSsh.binDir, async () => {
+                await expect(runRemoteBootstrapCommandDefault({
+                    label: 'server.configure',
+                    parsed: createParsedRemoteBootstrapParams(),
+                    auth: { mode: 'agent' },
+                    knownHostsMode: 'system',
+                })).rejects.toThrow();
+            });
         } finally {
             fakeSsh.cleanup();
         }

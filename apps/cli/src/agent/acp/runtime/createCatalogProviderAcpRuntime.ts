@@ -119,7 +119,11 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
         getMetadataSnapshot: () => params.session.getMetadataSnapshot(),
         updateMetadata: (updater) => params.session.updateMetadata(updater),
       });
-      return { kind: 'persist-bound' as const, persistBound: publisher.persistBound };
+      return {
+        kind: 'persist-bound' as const,
+        persistBound: publisher.persistBound,
+        confirmVendorSessionDurable: publisher.confirmVendorSessionDurable,
+      };
     }
     if (params.sessionIdentity.kind === 'custom') {
       return { kind: 'persist-bound' as const, persistBound: params.sessionIdentity.persistBound };

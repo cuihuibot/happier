@@ -14,6 +14,10 @@ function createRuntime(params: Readonly<{
     operation: 'create' | 'resume';
     vendorSessionId: string;
   }>) => Promise<void>;
+  confirmVendorSessionDurable?: (event: Readonly<{
+    generation: number;
+    vendorSessionId: string;
+  }>) => Promise<void>;
   drainPending?: () => Promise<void>;
   resolveExpectedVendorSessionIdForResume?: (resumeReference: string) => string | null;
 }>) {
@@ -26,7 +30,13 @@ function createRuntime(params: Readonly<{
     permissionHandler: createApprovedPermissionHandler(),
     onThinkingChange: () => {},
     ensureBackend: async () => params.backend,
-    sessionIdentity: { kind: 'persist-bound', persistBound: params.persistBound },
+    sessionIdentity: {
+      kind: 'persist-bound',
+      persistBound: params.persistBound,
+      ...(params.confirmVendorSessionDurable
+        ? { confirmVendorSessionDurable: params.confirmVendorSessionDurable }
+        : {}),
+    },
     resolveExpectedVendorSessionIdForResume: params.resolveExpectedVendorSessionIdForResume,
     ...(params.drainPending
       ? {
@@ -269,5 +279,64 @@ describe('createAcpRuntime session identity', () => {
 
     await expect(Promise.all([firstReset, secondReset])).resolves.toEqual([undefined, undefined]);
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an opened session bound when the post-open pending drain fails', async () => {
+    const calls: string[] = [];
+    const startSession = vi.fn(async () => {
+      calls.push('open');
+      return { sessionId: 'created-1' };
+    });
+    const backend = {
+      startSession,
+      sendPrompt: async () => {},
+      cancel: async () => {},
+      onMessage: () => {},
+      dispose: async () => {},
+    } satisfies AcpRuntimeBackend;
+    const runtime = createRuntime({
+      backend,
+      persistBound: async () => { calls.push('persisted'); },
+      drainPending: async () => {
+        calls.push('drain-failed');
+        throw new Error('pending drain unavailable');
+      },
+    });
+
+    // The vendor session is open and its identity is durable. A pending-delivery
+    // failure afterwards must not be reported to callers as a session-open failure,
+    // otherwise a resume is discarded and the queued message is left stranded.
+    await expect(runtime.startOrLoad({})).resolves.toBe('created-1');
+    expect(calls).toEqual(['open', 'persisted', 'drain-failed']);
+    expect(runtime.getSessionId()).toBe('created-1');
+    expect(startSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirms vendor session durability at the first completed turn boundary', async () => {
+    const confirmVendorSessionDurable = vi.fn(async () => {});
+    const backend = {
+      startSession: async () => ({ sessionId: 'created-1' }),
+      sendPrompt: async () => {},
+      cancel: async () => {},
+      onMessage: () => {},
+      dispose: async () => {},
+    } satisfies AcpRuntimeBackend;
+    const runtime = createRuntime({
+      backend,
+      persistBound: async () => {},
+      confirmVendorSessionDurable,
+    });
+
+    await runtime.startOrLoad({});
+    expect(confirmVendorSessionDurable).not.toHaveBeenCalled();
+
+    runtime.beginTurn();
+    await runtime.sendPrompt('hello');
+    await runtime.flushTurn();
+
+    expect(confirmVendorSessionDurable).toHaveBeenCalledWith({
+      generation: 0,
+      vendorSessionId: 'created-1',
+    });
   });
 });

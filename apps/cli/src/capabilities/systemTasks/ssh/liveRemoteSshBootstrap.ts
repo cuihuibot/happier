@@ -9,6 +9,7 @@ import {
   normalizeRemoteReleaseArch,
   normalizeRemoteReleaseOs,
   resolveSshKnownHostTrust,
+  resolveSshKnownHostsHostToken,
   SystemTaskExecutionError,
   type RemoteFirstPartyCommandResult,
   type RemoteHostTrustResolution,
@@ -84,16 +85,35 @@ function parseSshTarget(target: string): Readonly<{ host: string; port?: number 
   return { host: withoutUser };
 }
 
+function normalizeSshPort(value: unknown): number | undefined {
+  const port = Number(value);
+  if (!Number.isFinite(port) || port <= 0) {
+    return undefined;
+  }
+  return Math.floor(port);
+}
+
 function resolveSshEndpoint(params: Readonly<{
   ssh: SystemTaskSshConnectionConfig;
 }>): Readonly<{ host: string; port?: number }> {
   const parsedTarget = parseSshTarget(params.ssh.target);
+  // An explicit port is passed to ssh/scp as `-p`/`-P`, which overrides `ssh_config`.
+  const explicitPort = normalizeSshPort(params.ssh.port) ?? parsedTarget.port;
   const sshConfigFile = String(params.ssh.sshConfigFile ?? '').trim();
   if (!sshConfigFile) {
-    return parsedTarget;
+    return {
+      host: parsedTarget.host,
+      ...(explicitPort ? { port: explicitPort } : {}),
+    };
   }
 
-  const result = spawnSync('ssh', ['-G', '-F', sshConfigFile, params.ssh.target], {
+  const result = spawnSync('ssh', [
+    '-G',
+    '-F',
+    sshConfigFile,
+    ...(explicitPort ? ['-p', String(explicitPort)] : []),
+    params.ssh.target,
+  ], {
     encoding: 'utf8',
     windowsHide: true,
   });
@@ -118,13 +138,52 @@ function resolveSshEndpoint(params: Readonly<{
     }
   }
 
-  const resolvedPort = Number(values.get('port') ?? '');
+  const resolvedPort = explicitPort ?? normalizeSshPort(values.get('port'));
   return {
     host: values.get('hostname')?.trim() || parsedTarget.host,
-    ...(Number.isFinite(resolvedPort) && resolvedPort > 0
-      ? { port: Math.floor(resolvedPort) }
-      : (typeof parsedTarget.port === 'number' ? { port: parsedTarget.port } : {})),
+    ...(resolvedPort ? { port: resolvedPort } : {}),
   };
+}
+
+const sshEndpointCache = new Map<string, Readonly<{ host: string; port?: number }>>();
+
+function sshEndpointCacheKey(ssh: SystemTaskSshConnectionConfig): string {
+  return [
+    String(ssh.target ?? ''),
+    String(normalizeSshPort(ssh.port) ?? ''),
+    String(ssh.sshConfigFile ?? '').trim(),
+  ].join('\u0000');
+}
+
+/**
+ * Memoizes `ssh -G` resolution, which is a deterministic local lookup for a given
+ * target/port/config triple and is otherwise re-spawned for every transport invocation.
+ */
+function resolveCachedSshEndpoint(ssh: SystemTaskSshConnectionConfig): Readonly<{ host: string; port?: number }> {
+  if (!String(ssh.sshConfigFile ?? '').trim()) {
+    return resolveSshEndpoint({ ssh });
+  }
+  const cacheKey = sshEndpointCacheKey(ssh);
+  const cached = sshEndpointCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const endpoint = resolveSshEndpoint({ ssh });
+  sshEndpointCache.set(cacheKey, endpoint);
+  return endpoint;
+}
+
+/**
+ * The single canonical `known_hosts` token for a connection.
+ *
+ * `ssh-keyscan` records the key under the token of the endpoint it actually contacted,
+ * which for an `ssh_config` alias is the resolved `HostName`/`Port` rather than the alias
+ * the user typed. Every later `ssh`/`scp` invocation must pin `HostKeyAlias` to this same
+ * token, otherwise the trust step accepts one token and verification checks another.
+ */
+function resolveSshKnownHostsToken(ssh: SystemTaskSshConnectionConfig): string {
+  const endpoint = resolveCachedSshEndpoint(ssh);
+  return resolveSshKnownHostsHostToken({ target: endpoint.host, port: endpoint.port });
 }
 
 function runCommandSync(params: Readonly<{
@@ -165,6 +224,9 @@ function runSshCommand(params: Readonly<{
     remoteCommand: params.remoteCommand,
     knownHostsPath: params.knownHostsPath,
     knownHostsMode: params.knownHostsMode,
+    hostKeyAlias: (params.knownHostsMode ?? 'app') === 'app'
+      ? resolveSshKnownHostsToken(params.ssh)
+      : undefined,
     auth: params.auth,
     connectTimeoutSec: 10,
     serverAliveIntervalSec: 15,
@@ -196,6 +258,9 @@ function runSshCommandResult(params: Readonly<{
     remoteCommand: params.remoteCommand,
     knownHostsPath: params.knownHostsPath,
     knownHostsMode: params.knownHostsMode,
+    hostKeyAlias: (params.knownHostsMode ?? 'app') === 'app'
+      ? resolveSshKnownHostsToken(params.ssh)
+      : undefined,
     auth: params.auth,
     connectTimeoutSec: 10,
     serverAliveIntervalSec: 15,
@@ -306,6 +371,9 @@ function copyLocalDirectoryToRemote(params: Readonly<{
     remotePath: params.remotePath,
     knownHostsPath: params.knownHostsPath,
     knownHostsMode: params.knownHostsMode,
+    hostKeyAlias: (params.knownHostsMode ?? 'app') === 'app'
+      ? resolveSshKnownHostsToken(params.ssh)
+      : undefined,
     auth: params.auth,
     connectTimeoutSec: 10,
     serverAliveIntervalSec: 15,
@@ -473,7 +541,11 @@ export function createLiveRemoteSshBootstrapTaskKind() {
 
       const knownHostsPath = resolveKnownHostsPath(ssh, knownHostsMode);
       const existingKnownHostsText = readKnownHostsText(knownHostsPath);
-      const parsedTarget = resolveSshEndpoint({ ssh });
+      const parsedTarget = resolveCachedSshEndpoint(ssh);
+      const knownHostsToken = resolveSshKnownHostsHostToken({
+        target: parsedTarget.host,
+        port: parsedTarget.port,
+      });
       const keyscanOutput = runCommandSync({
         command: 'ssh-keyscan',
         args: [
@@ -489,7 +561,11 @@ export function createLiveRemoteSshBootstrapTaskKind() {
       const scanned = extractFirstScannedSshKnownHostLine(keyscanOutput);
       const trust = resolveSshKnownHostTrust({
         knownHostsText: existingKnownHostsText,
-        scannedHostKeyLine: scanned.line,
+        // Store and compare under the one token every later `ssh`/`scp` invocation pins
+        // via `HostKeyAlias`, so acceptance and verification cannot diverge.
+        scannedHostKeyLine: knownHostsToken
+          ? `${knownHostsToken} ${scanned.keyType} ${scanned.key}`
+          : scanned.line,
         trustedHostKey: ssh.trustedHostKey,
       });
 

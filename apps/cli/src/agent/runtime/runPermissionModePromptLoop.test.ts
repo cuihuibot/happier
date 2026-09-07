@@ -1729,7 +1729,52 @@ describe('runPermissionModePromptLoop', () => {
     expect(runtime.startOrLoad).toHaveBeenNthCalledWith(1, { resumeId: 'resume-id', importHistory: false });
     expect(runtime.reset).toHaveBeenCalledTimes(1);
     expect(runtime.startOrLoad).toHaveBeenNthCalledWith(2, {});
-    expect(sendAgentMessageSpy).toHaveBeenCalledWith('qwen', { type: 'message', message: 'Resume failed; starting a new session.' });
+    expect(sendAgentMessageSpy).toHaveBeenCalledWith('qwen', { type: 'message', message: 'Resume failed; starting a new session: Error: Error: resume failed' });
+    expect(runtime.sendPrompt).toHaveBeenCalledWith('hello');
+  });
+
+  it('surfaces the provider failure reason when falling back to a fresh session', async () => {
+    const session = createPromptLoopSession();
+    const sendAgentMessageSpy = vi.spyOn(session, 'sendAgentMessage');
+    const queue = createModeQueue();
+    const runtime = createRuntime();
+    runtime.startOrLoad = vi.fn(async (opts: { resumeId?: string }) => {
+      if (opts.resumeId) {
+        throw new Error('Resource not found: Session cop-1 not found');
+      }
+    });
+    const messageBuffer = new MessageBuffer();
+    const permissionHandler = { setPermissionMode: vi.fn(), reset: vi.fn() } as any;
+
+    queue.push({ text: 'hello', localId: 'local-diag' }, { permissionMode: 'default' });
+
+    let shouldExit = false;
+    await runPermissionModePromptLoop({
+      providerName: 'Test Provider',
+      agentMessageType: 'qwen',
+      explicitPermissionMode: undefined,
+      session,
+      messageQueue: queue,
+      permissionHandler,
+      runtime,
+      createOverrideSynchronizer: () => ({ syncFromMetadata: () => {}, flushPendingAfterStart: async () => {} }),
+      messageBuffer,
+      shouldExit: () => shouldExit,
+      getAbortSignal: () => new AbortController().signal,
+      keepAlive: () => {},
+      setThinking: () => {},
+      sendReady: () => { shouldExit = true; },
+      currentPermissionModeUpdatedAt: 0,
+      setCurrentPermissionMode: () => {},
+      setCurrentPermissionModeUpdatedAt: () => {},
+      initialResumeId: 'cop-1',
+      formatPromptErrorMessage: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+
+    expect(sendAgentMessageSpy).toHaveBeenCalledWith('qwen', {
+      type: 'message',
+      message: 'Resume failed; starting a new session: Resource not found: Session cop-1 not found',
+    });
     expect(runtime.sendPrompt).toHaveBeenCalledWith('hello');
   });
 

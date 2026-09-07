@@ -7,10 +7,10 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import cliDistBuildManifest from '../../../packages/cli-common/cliDistBuildManifest.cjs';
+import { BUN_STANDALONE_ENTITLEMENTS_PATH } from './bun-standalone-entitlements.mjs';
 import { createNodeArchive, extractNodeArchive } from './node-archive.mjs';
 
 const THIN_MACH_O_MAGICS = new Map([
@@ -37,9 +37,6 @@ const JIT_CODESIGN_METADATA = [
   'library-constraints',
 ].join(',');
 const JIT_ENTITLEMENT_REQUIREMENT = '=entitlement["com.apple.security.cs.allow-jit"] exists';
-const BUN_STANDALONE_ENTITLEMENTS_PATH = fileURLToPath(
-  new URL('./bun-standalone.entitlements.plist', import.meta.url),
-);
 const DEFAULT_CODESIGN_ATTEMPTS = 4;
 const DEFAULT_CODESIGN_RETRY_DELAY_MS = 15_000;
 const DEFAULT_GATEKEEPER_ATTEMPTS = 18;

@@ -28,7 +28,9 @@ export {
 } from './remoteFirstPartyPayloadInstaller.js';
 export {
   extractFirstScannedSshKnownHostLine,
+  extractSshTargetHost,
   parseSshKnownHostLine,
+  resolveSshKnownHostsHostToken,
   resolveSshKnownHostTrust,
   type ParsedSshKnownHostLine,
   type ResolvedSshHostTrust,

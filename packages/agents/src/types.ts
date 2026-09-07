@@ -100,6 +100,8 @@ export type ConnectedServicesProviderStateSharingCapability = Readonly<{
     }>;
 }>;
 
+export type VendorResumeIdDurability = 'at-session-open' | 'after-first-persisted-turn';
+
 export type AgentResumeConfig = Readonly<{
     vendorResume: VendorResumeSupportLevel;
     vendorResumeIdField?: VendorResumeIdField | null;
@@ -124,6 +126,19 @@ export type AgentResumeConfig = Readonly<{
      * runtime reading an absent key and silently drop the pointer.
      */
     vendorResumeContinuityProofField?: string | null;
+    /**
+     * When this Agent's vendor resume id becomes usable for a later resume.
+     *
+     * `at-session-open` (the default) means the id the Agent returns when a
+     * session is opened can be resumed from that moment on.
+     *
+     * `after-first-persisted-turn` means the Agent mints the id at session open
+     * but only materializes a resumable session once its first turn is
+     * persisted. Publishing such an id before the turn lands records a resume
+     * target the Agent will reject, so the host must defer publication until the
+     * vendor session is confirmed durable.
+     */
+    vendorResumeIdDurability?: VendorResumeIdDurability;
     experimentalResumePolicy?: 'disabled_by_default' | 'runtime_checked';
 }>;
 
