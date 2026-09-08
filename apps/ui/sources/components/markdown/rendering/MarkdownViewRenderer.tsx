@@ -16,6 +16,7 @@ import {
 import { splitMarkdownRenderSegments } from './splitMarkdownRenderSegments';
 import { StaticMarkdownRenderPlaceholder } from './StaticMarkdownRenderPlaceholder';
 import { useDelayedStaticMarkdownRenderPlaceholder } from './useDelayedStaticMarkdownRenderPlaceholder';
+import { normalizeOpaqueCitationMarkers } from '../normalizeOpaqueCitationMarkers';
 
 type MarkdownViewRendererProps = Readonly<{
     testID?: string;
@@ -36,6 +37,7 @@ type MarkdownViewRendererProps = Readonly<{
     renderAfterSourceRange?: (action: MarkdownSourceRangeAction) => React.ReactNode;
     highlightSourceRange?: MarkdownSourceRange | null;
     agentTexMath: boolean;
+    opaqueCitationDisplay?: 'numeric';
 }>;
 
 function readStreamingSegmentCache(params: Readonly<{
@@ -70,10 +72,19 @@ function writeStreamingSegmentCache(params: Readonly<{
 }
 
 export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps) => {
+    const sourceMarkdown = React.useMemo(
+        () => props.opaqueCitationDisplay === 'numeric'
+            ? normalizeOpaqueCitationMarkers(props.markdown, {
+                hideIncompleteTrailingMarker: props.streamingMode === 'streaming',
+            })
+            : props.markdown,
+        [props.markdown, props.opaqueCitationDisplay, props.streamingMode],
+    );
     const preparedMarkdown = usePreparedStreamingMarkdown({
-        markdown: props.markdown,
+        markdown: sourceMarkdown,
         mode: props.streamingMode,
     });
+    const displayMarkdown = preparedMarkdown;
     const sourceRangeInteractionsActive = Boolean(
         props.sourceRangeLayoutObserver ||
         props.onPressSourceRange ||
@@ -83,27 +94,27 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
     const segments = React.useMemo(() => {
         const cached = readStreamingSegmentCache({
             parseCacheKey: props.streamingParseCacheKey,
-            preparedMarkdown,
+            preparedMarkdown: displayMarkdown,
             streamingMode: props.streamingMode,
             splitEnrichedSourceRanges: sourceRangeInteractionsActive,
         });
         if (cached) return cached;
 
         const nextSegments = splitMarkdownRenderSegments({
-            markdown: preparedMarkdown,
+            markdown: displayMarkdown,
             streamingMode: props.streamingMode,
             streamingRepair: 'prepared',
             splitEnrichedSourceRanges: sourceRangeInteractionsActive,
         });
         writeStreamingSegmentCache({
             parseCacheKey: props.streamingParseCacheKey,
-            preparedMarkdown,
+            preparedMarkdown: displayMarkdown,
             streamingMode: props.streamingMode,
             splitEnrichedSourceRanges: sourceRangeInteractionsActive,
             segments: nextSegments,
         });
         return nextSegments;
-    }, [preparedMarkdown, props.streamingMode, props.streamingParseCacheKey, sourceRangeInteractionsActive]);
+    }, [displayMarkdown, props.streamingMode, props.streamingParseCacheKey, sourceRangeInteractionsActive]);
     const segmentKeys = React.useMemo(() => {
         if (!props.sourceRangeLayoutObserver) return segments.map((segment) => segment.key);
         const occurrences = new Map<string, number>();

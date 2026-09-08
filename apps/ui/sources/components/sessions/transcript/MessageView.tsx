@@ -4,6 +4,7 @@ import { isRecoveredHistoryTranscriptObservationProvenance } from '@happier-dev/
 import { Modal } from '@/modal';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
+import { normalizeOpaqueCitationMarkers } from '@/components/markdown/normalizeOpaqueCitationMarkers';
 import { t } from '@/text';
 import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage } from "@/sync/domains/messages/messageTypes";
 import { Metadata } from "@/sync/domains/state/storageTypes";
@@ -843,7 +844,7 @@ function UserTextBlock(props: {
                 interaction={props.interaction}
                 onJumpToAnchor={handleJumpToAnchor}
               />
-              <MarkdownView markdown={renderedMarkdownText} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
+              <MarkdownView markdown={renderedMarkdownText} opaqueCitationDisplay="numeric" onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
               {sessionMediaInlineImages.length > 0 ? (
                 <SessionMediaInlineImages
                   sessionId={props.sessionId}
@@ -1211,6 +1212,19 @@ function AgentTextBlock(props: {
     props.message.isThinking === true && streamingSmoothingEligible ? streaming.displayText : markdown;
   const thinkingStreamingActive =
     props.message.isThinking === true && streamingSmoothingEligible && streaming.isStreaming;
+  const thinkingDisplayMarkdown = React.useMemo(
+    () => normalizeOpaqueCitationMarkers(thinkingRenderMarkdown, {
+      hideIncompleteTrailingMarker: thinkingStreamingActive,
+    }),
+    [thinkingRenderMarkdown, thinkingStreamingActive],
+  );
+  const thinkingSummaryText = React.useMemo(
+    () => normalizeOpaqueCitationMarkers(thinkingRenderMarkdown, {
+      escapeMarkdown: false,
+      hideIncompleteTrailingMarker: thinkingStreamingActive,
+    }),
+    [thinkingRenderMarkdown, thinkingStreamingActive],
+  );
   const shouldRenderStreamingPlain = shouldRenderActiveStreamSegmentPlain || (props.message.isThinking !== true && streaming.isStreaming);
   const shouldRenderStreamingMarkdown =
     shouldRenderStreamingPlain && transcriptStreamingMarkdownRenderingEnabled === true;
@@ -1218,6 +1232,13 @@ function AgentTextBlock(props: {
   // renders its output directly; the parse cache keeps per-frame cost bounded
   // to the changing tail block.
   const streamingMarkdownText = streaming.displayText;
+  const streamingDisplayText = React.useMemo(
+    () => normalizeOpaqueCitationMarkers(streaming.displayText, {
+      escapeMarkdown: false,
+      hideIncompleteTrailingMarker: true,
+    }),
+    [streaming.displayText],
+  );
   const committedStreamingMarkdownMessageIdRef = React.useRef<string | null>(null);
   const staticRenderPlaceholderEnabled =
     shouldRenderStreamingMarkdown ||
@@ -1296,7 +1317,7 @@ function AgentTextBlock(props: {
                 startedAt: null,
                 completedAt: props.message.createdAt,
                 description: null,
-                result: { content: thinkingRenderMarkdown },
+                result: { content: thinkingDisplayMarkdown },
               }}
               messages={[]}
             />
@@ -1306,7 +1327,7 @@ function AgentTextBlock(props: {
                   id={props.message.id}
                   createdAt={props.message.createdAt}
                   label={t('sessionInfo.thinking')}
-                  summary={deriveThinkingSummary(thinkingRenderMarkdown)}
+                  summary={deriveThinkingSummary(thinkingSummaryText)}
                   expandedByDefault={normalizedThinkingInlinePresentation === 'full'}
                   pulseEnabled={thinkingPulseEnabled}
                   chrome={normalizedThinkingInlineChrome}
@@ -1315,7 +1336,7 @@ function AgentTextBlock(props: {
                 >
                   <MarkdownView
                     testID="transcript-thinking-body-markdown"
-                    markdown={thinkingRenderMarkdown}
+                    markdown={thinkingDisplayMarkdown}
                     agentTexMath
                     onOptionPress={handleOptionPress}
                     onOptionLongPress={handleOptionLongPress}
@@ -1338,6 +1359,7 @@ function AgentTextBlock(props: {
                 <MarkdownView
                   markdown={streamingMarkdownText}
                   agentTexMath
+                  opaqueCitationDisplay="numeric"
                   onOptionPress={handleOptionPress}
                   onOptionLongPress={handleOptionLongPress}
                   onLinkPress={handleMarkdownLinkPress}
@@ -1355,12 +1377,13 @@ function AgentTextBlock(props: {
                   selectable={fallbackTextSelectable}
                   style={[styles.transcriptMarkdownText, styles.streamingPlainText]}
                 >
-                  {streaming.displayText}
+                  {streamingDisplayText}
                 </Text>
               ) : (
                 <MarkdownView
                   markdown={markdown}
                   agentTexMath
+                  opaqueCitationDisplay="numeric"
                   onOptionPress={handleOptionPress}
                   onOptionLongPress={handleOptionLongPress}
                   onLinkPress={handleMarkdownLinkPress}

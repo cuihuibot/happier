@@ -147,6 +147,59 @@ describe('createAcpRuntime (transcript streaming vNext)', () => {
     )).toBe(true);
   });
 
+  it('retries a task_complete summary when the streamed fallback is not durably flushed', async () => {
+    const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_main' });
+    const durableCalls: Array<{ localId: string; body: ACPMessageData; meta?: Record<string, unknown> }> = [];
+    const streamedLocalIds: string[] = [];
+    let commitAttempts = 0;
+    const session = createBasicSessionClientWithOverrides({
+      sendAgentMessageCommitted: async (_provider, body, opts) => {
+        commitAttempts += 1;
+        if (opts.meta?.happierStreamSegmentV1) {
+          streamedLocalIds.push(opts.localId);
+          throw new Error('streamed transcript commit unavailable');
+        }
+        durableCalls.push({ localId: opts.localId, body, meta: opts.meta });
+      },
+    });
+    const runtime = createAcpRuntime({
+      provider: 'copilot',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+    backend.emit({
+      type: 'tool-call',
+      toolName: 'task_complete',
+      args: {
+        summary: 'RETRIED_TASK_COMPLETE_SUMMARY',
+      },
+      callId: 'task-complete-retry-1',
+    } satisfies AgentMessage);
+    backend.emit({
+      type: 'tool-result',
+      toolName: 'task_complete',
+      result: { ok: true },
+      callId: 'task-complete-retry-1',
+    } satisfies AgentMessage);
+
+    await runtime.flushTurn();
+
+    expect(commitAttempts).toBeGreaterThanOrEqual(2);
+    expect(durableCalls).toContainEqual({
+      localId: streamedLocalIds[0],
+      body: { type: 'message', message: 'RETRIED_TASK_COMPLETE_SUMMARY' },
+      meta: undefined,
+    });
+  });
+
   it.each([
     { snapshotScope: 'segment' as const, finalSnapshot: 'Final answer.' },
     { snapshotScope: 'turn' as const, finalSnapshot: 'Progress update.Final answer.' },
