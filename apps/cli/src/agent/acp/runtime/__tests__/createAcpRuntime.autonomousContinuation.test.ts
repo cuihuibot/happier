@@ -193,6 +193,26 @@ describe('createAcpRuntime provider-autonomous continuation', () => {
     expect(persistedRowMessages(durableCalls).filter((m) => m === 'IN_FLIGHT_TEXT')).toHaveLength(1);
   });
 
+  it('does not discard continuation output when a new segment opens before the previous flush ran', async () => {
+    // A provider segment boundary must never reset runtime turn state while the previous
+    // segment's output is still unflushed.
+    const { backend, runtime, durableCalls } = createHarness();
+    await runtime.startOrLoad({});
+
+    beginContinuation(backend);
+    backend.emit({ type: 'model-output', textDelta: 'SEGMENT_ONE_PROSE' } satisfies AgentMessage);
+    endContinuation(backend);
+    // No await here: the next segment opens before the queued flush has run.
+    beginContinuation(backend);
+    backend.emit({ type: 'model-output', textDelta: 'SEGMENT_TWO_PROSE' } satisfies AgentMessage);
+    endContinuation(backend);
+    await runtime.waitForAutonomousContinuationIdle();
+
+    const messages = persistedRowMessages(durableCalls);
+    expect(messages.filter((m) => m.includes('SEGMENT_ONE_PROSE'))).toHaveLength(1);
+    expect(messages.filter((m) => m.includes('SEGMENT_TWO_PROSE'))).toHaveLength(1);
+  });
+
   it('settles an open continuation before a new client turn resets runtime turn state', async () => {
     const { backend, runtime, durableCalls } = createHarness();
     await runtime.startOrLoad({});

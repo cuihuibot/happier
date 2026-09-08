@@ -106,12 +106,24 @@ already been finalized.
   after `end_turn` waiting to see whether a continuation arrives. The arrival of
   a real prompt-turn notification is itself the signal to reopen. Nothing is
   delayed on turns that have no continuation.
-- **The stall budget only closes, never gates.** `stallMs` (default 2000 ms)
-  closes a continuation segment whose output has *already* been projected. It
-  cannot drop or withhold output, and it is not evidence that the provider
-  finished. It mirrors the existing response-completion stall budget. A
-  terminal `task_complete` tool call closes the segment immediately, so the
-  common autopilot path never waits for it.
+- **The deterministic close is the provider's own terminal signal.** Copilot
+  announces the tool name on `tool_call` and reports the terminal status on a
+  later status-only `tool_call_update`, so the terminal detector correlates the
+  completion by `toolCallId`. Every observed autopilot run closes on that
+  signal rather than on a timer.
+- **The stall budget only closes, never gates.** `stallMs` (default 30 s) is a
+  safety cap for a provider that never reports `task_complete`. It closes a
+  segment whose output has *already* been projected, so it cannot drop or
+  withhold output, and it is not evidence that the provider finished. It is
+  deliberately far longer than an ordinary pause between reasoning and prose: a
+  short budget ends the run mid-work and pushes the remaining output across a
+  segment boundary, which is exactly how output was lost in live testing.
+- **Client-turn idle budgets must not close a continuation.** The existing
+  post-prompt idle timers exist to bound a *client* prompt turn whose completion
+  was already published before the continuation opened. `finalizeIdleStatus()`
+  therefore defers to an open continuation; otherwise it closes the generation
+  during an ordinary reasoning pause and the provider's remaining output is
+  dropped.
 - **Opt-in per provider.** Only the Copilot ACP backend passes
   `providerAutonomousContinuation`. Every other ACP provider keeps byte-identical
   behavior.
@@ -159,14 +171,25 @@ autopilot mode:
    `task_complete` summary carrying a unique marker.
 2. Confirm the persisted transcript contains the stage-one commentary and
    exactly one assistant row containing the stage-two marker.
-3. Repeat with a prompt whose continuation ends in plain prose rather than
-   `task_complete`, and confirm the prose persists.
+3. Repeat with a prompt whose continuation reasons for several seconds and then
+   emits plain prose before `task_complete`, and confirm the prose persists.
+   This is the scenario that a short stall budget breaks.
 4. Send a new prompt while a continuation is still running and confirm the
    continuation output persists under its own turn and the new turn is answered.
 5. Cancel during a continuation and confirm the session stops and reports
    truthfully.
 6. Confirm no duplicate assistant rows and that `pendingCount` and
-   `pendingBlockedCount` both return to zero.
+   `pendingBlockedCount` both return to zero. In autopilot mode the provider
+   may legitimately restate a summary in a following continuation; those are
+   distinct provider turns with distinct segment identities, not duplicate rows
+   for one turn.
+7. Confirm the session debug log records `Closed provider-autonomous
+   continuation ... (task_complete)` rather than `(inactivity)`, and records no
+   `Dropping prompt-turn session/update` lines. Enable `DEBUG=1` for this check.
+
+Tuning overrides for diagnostics only:
+`HAPPIER_ACP_MAX_AUTONOMOUS_CONTINUATIONS`,
+`HAPPIER_ACP_AUTONOMOUS_CONTINUATION_STALL_MS`.
 
 Comparing the native provider event log, the ACP wire trace, and the persisted
 transcript is required. A successful `session create` or an idle `send --wait`
