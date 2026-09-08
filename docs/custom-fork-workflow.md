@@ -3,6 +3,10 @@
 This checkout keeps Cuihui-specific Happier changes in `cuihuibot/happier`
 without proposing or pushing them to `happier-dev/happier`.
 
+The maintained behavior, regression commands, deployment procedure, and
+rollback record are documented in
+[Cuihui Happier customizations](cuihui-customizations.md).
+
 ## Repository model
 
 | Name | Purpose | Push policy |
@@ -86,4 +90,3 @@ git remote set-url --push upstream DISABLED
 git config remote.pushDefault origin
 git branch --set-upstream-to=origin/custom/cuihui custom/cuihui
 ```
-
