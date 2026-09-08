@@ -771,8 +771,28 @@ export type AcpProviderAutonomousContinuationOptions = Readonly<{
   stallMs?: number;
 }>;
 
+/**
+ * How a provider-autonomous continuation segment ended.
+ *
+ * Only `completed` means the provider itself reported that the autonomous work finished.
+ * Every other outcome is an interruption or a safety stop, and the runtime must project it
+ * as an explicitly incomplete turn rather than as a successful one.
+ */
+export type AcpAutonomousContinuationEndOutcome =
+  | 'completed'
+  | 'timed_out'
+  | 'cancelled'
+  | 'failed';
+
 const DEFAULT_AUTONOMOUS_CONTINUATIONS_PER_TURN = 8;
 const DEFAULT_AUTONOMOUS_CONTINUATION_STALL_MS = 30_000;
+/**
+ * How many consecutive stall budgets a continuation may consume while one of its own tool
+ * calls is still unresolved. A running tool is legitimate provider work, so the budget must
+ * not treat it as a stall, but it must still be bounded so a tool that never resolves cannot
+ * hold the session busy forever.
+ */
+const MAX_AUTONOMOUS_CONTINUATION_ACTIVE_TOOL_EXTENSIONS = 20;
 
 export type AcpSteerDeliveryIdentity = Readonly<{
   localId?: string | null;
@@ -914,6 +934,8 @@ export class AcpBackend implements AgentBackend {
    */
   private autonomousContinuationTaskCompleteCallIds = new Set<string>();
   private autonomousContinuationGeneration: number | null = null;
+  /** Consecutive stall budgets already extended because a continuation tool call was running. */
+  private autonomousContinuationActiveToolExtensions = 0;
   private autonomousContinuationStallTimeout: NodeJS.Timeout | null = null;
 
   /** Transport handler for agent-specific behavior */
@@ -2424,7 +2446,7 @@ export class AcpBackend implements AgentBackend {
     // on that explicit provider signal keeps the busy state accurate without waiting for the
     // inactivity budget.
     if (this.isAutonomousContinuationActive() && this.observeAutonomousContinuationTerminalSignal(normalizedUpdates)) {
-      this.endAutonomousContinuation('task_complete');
+      this.endAutonomousContinuation('task_complete', 'completed');
     }
   }
 
@@ -2836,9 +2858,12 @@ export class AcpBackend implements AgentBackend {
     this.autonomousContinuationRemaining = limits.maxPerTurn;
   }
 
-  private disarmAutonomousContinuation(reason: string): void {
+  private disarmAutonomousContinuation(
+    reason: string,
+    outcome: AcpAutonomousContinuationEndOutcome = 'cancelled',
+  ): void {
     if (this.autonomousContinuationGeneration !== null) {
-      this.endAutonomousContinuation(reason);
+      this.endAutonomousContinuation(reason, outcome);
     }
     this.autonomousContinuationArmedGeneration = null;
     this.autonomousContinuationRemaining = 0;
@@ -2922,9 +2947,10 @@ export class AcpBackend implements AgentBackend {
    * longer than an ordinary provider pause between reasoning and prose. Output is always
    * projected before this can fire, so it never gates or drops delivery.
    */
-  private bumpAutonomousContinuationStall(): void {
+  private bumpAutonomousContinuationStall(observedProgress = true): void {
     const limits = this.resolveAutonomousContinuationLimits();
     if (!limits || !this.isAutonomousContinuationActive()) return;
+    if (observedProgress) this.autonomousContinuationActiveToolExtensions = 0;
 
     if (this.autonomousContinuationStallTimeout) {
       clearTimeout(this.autonomousContinuationStallTimeout);
@@ -2934,7 +2960,23 @@ export class AcpBackend implements AgentBackend {
     this.autonomousContinuationStallTimeout = setTimeout(() => {
       this.autonomousContinuationStallTimeout = null;
       if (this.turnGeneration !== generation) return;
-      this.endAutonomousContinuation('inactivity');
+      // A tool call that is still running is provider work in progress, not silence. Extending
+      // the budget keeps a slow tool from being misreported as a stall, but the extension is
+      // bounded so an unresolved tool call cannot hold the session busy indefinitely.
+      if (
+        this.toolCalls.activeSize > 0
+        && this.autonomousContinuationActiveToolExtensions < MAX_AUTONOMOUS_CONTINUATION_ACTIVE_TOOL_EXTENSIONS
+      ) {
+        this.autonomousContinuationActiveToolExtensions += 1;
+        logger.debug(
+          `[AcpBackend] Extending provider-autonomous continuation ${this.autonomousContinuationId} stall budget `
+          + `(${this.toolCalls.activeSize} tool call(s) still running, extension `
+          + `${this.autonomousContinuationActiveToolExtensions}/${MAX_AUTONOMOUS_CONTINUATION_ACTIVE_TOOL_EXTENSIONS})`,
+        );
+        this.bumpAutonomousContinuationStall(false);
+        return;
+      }
+      this.endAutonomousContinuation('inactivity', 'timed_out');
     }, limits.stallMs);
     this.autonomousContinuationStallTimeout.unref?.();
   }
@@ -2962,7 +3004,10 @@ export class AcpBackend implements AgentBackend {
   }
 
   /** Close an open continuation generation and hand the session back to the client. */
-  private endAutonomousContinuation(reason: string): void {
+  private endAutonomousContinuation(
+    reason: string,
+    outcome: AcpAutonomousContinuationEndOutcome,
+  ): void {
     const continuationId = this.autonomousContinuationId;
     const generation = this.autonomousContinuationGeneration;
     if (generation === null) return;
@@ -2973,23 +3018,40 @@ export class AcpBackend implements AgentBackend {
     }
     this.autonomousContinuationGeneration = null;
     this.autonomousContinuationId = null;
+    this.autonomousContinuationActiveToolExtensions = 0;
     this.autonomousContinuationTaskCompleteCallIds.clear();
 
     if (generation === this.turnGeneration) {
       this.plans.finalizeTurn(resolveAcpPlanTurnId(generation));
       this.closeCurrentTurnGeneration();
       this.clearActiveToolCallStateForTerminalTurn(`autonomous continuation ended (${reason})`);
-      // Another continuation may still follow within the remaining budget.
+      // Another continuation may still follow within the remaining budget. This deliberately
+      // also applies after a safety timeout: late provider output must open a new, honestly
+      // labelled segment rather than be dropped, and the stalled segment stays marked
+      // incomplete.
       if (this.autonomousContinuationRemaining > 0 && !this.disposed) {
         this.autonomousContinuationArmedGeneration = generation;
+      } else if (!this.disposed) {
+        logger.debug(
+          '[AcpBackend] Provider-autonomous continuation budget exhausted; further provider output '
+          + 'for this turn will be dropped by the dispatch guard',
+        );
       }
     }
 
-    logger.debug(`[AcpBackend] Closed provider-autonomous continuation ${continuationId} (${reason})`);
+    logger.debug(
+      `[AcpBackend] Closed provider-autonomous continuation ${continuationId} (${reason}, outcome=${outcome})`,
+    );
     this.emit({
       type: 'event',
       name: 'autonomous_continuation',
-      payload: { phase: 'ended', continuationId, reason },
+      payload: {
+        phase: 'ended',
+        continuationId,
+        reason,
+        outcome,
+        stallMs: this.resolveAutonomousContinuationLimits()?.stallMs ?? null,
+      },
     });
     if (!this.disposed) {
       this.emit({ type: 'status', status: 'idle' });
@@ -3068,7 +3130,7 @@ export class AcpBackend implements AgentBackend {
     }
     this.responseCompletionError = error;
     this.waitingForResponse = false;
-    this.disarmAutonomousContinuation('turn failed');
+    this.disarmAutonomousContinuation('turn failed', 'failed');
     if (this.promptCompletionSettlement?.generation === this.turnGeneration) {
       this.promptCompletionSettlement = null;
     }
@@ -3150,7 +3212,7 @@ export class AcpBackend implements AgentBackend {
     }
 
     // A client prompt always supersedes any provider-owned continuation window.
-    this.disarmAutonomousContinuation('superseded by client prompt');
+    this.disarmAutonomousContinuation('superseded by client prompt', 'cancelled');
 
     this.emit({ type: 'status', status: 'running' });
     const turnGeneration = this.turnGeneration + 1;
@@ -3895,7 +3957,7 @@ export class AcpBackend implements AgentBackend {
 
   async cancel(sessionId: SessionId): Promise<void> {
     this.promptCompletionSettlement = null;
-    this.disarmAutonomousContinuation('cancelled by user');
+    this.disarmAutonomousContinuation('cancelled by user', 'cancelled');
     if (this.waitingForResponse) {
       this.failPendingResponseWait(makeAbortError('Cancelled by user'));
     } else {
@@ -3973,8 +4035,11 @@ export class AcpBackend implements AgentBackend {
     if (this.disposed) return;
     
     logger.debug('[AcpBackend] Disposing backend');
+    // Close an open provider-autonomous continuation *before* the disposed flag silences
+    // `emit`. Otherwise the runtime never learns the segment ended, the already-produced
+    // provider text is never flushed, and the turn is left silently unresolved.
+    this.disarmAutonomousContinuation('backend disposed', 'failed');
     this.disposed = true;
-    this.disarmAutonomousContinuation('backend disposed');
 
     if (this.waitingForResponse || this.responseCompletionTimeout) {
       this.failPendingResponseWait(makeAbortError('Backend disposed'));

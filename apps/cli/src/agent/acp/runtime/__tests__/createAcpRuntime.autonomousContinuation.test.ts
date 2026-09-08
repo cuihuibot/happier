@@ -52,11 +52,27 @@ function beginContinuation(backend: ReturnType<typeof createFakeAcpRuntimeBacken
   } satisfies AgentMessage);
 }
 
-function endContinuation(backend: ReturnType<typeof createFakeAcpRuntimeBackend>) {
+/**
+ * End a continuation the way the backend reports a real provider completion.
+ *
+ * `outcome` is part of the backend-to-runtime contract: only `completed` may be projected as
+ * a successful turn. Non-success outcomes are covered in
+ * `createAcpRuntime.continuationOutcome.test.ts`.
+ */
+function endContinuation(
+  backend: ReturnType<typeof createFakeAcpRuntimeBackend>,
+  outcome: 'completed' | 'timed_out' | 'cancelled' | 'failed' = 'completed',
+) {
   backend.emit({
     type: 'event',
     name: 'autonomous_continuation',
-    payload: { phase: 'ended', continuationId: 'cont-1', reason: 'task_complete' },
+    payload: {
+      phase: 'ended',
+      continuationId: 'cont-1',
+      reason: outcome === 'completed' ? 'task_complete' : outcome,
+      outcome,
+      stallMs: 30_000,
+    },
   } satisfies AgentMessage);
 }
 
