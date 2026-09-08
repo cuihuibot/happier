@@ -50,6 +50,10 @@ export function buildCopilotAcpBackendOptions(options: CopilotBackendOptions): A
     mcpServers: options.mcpServers,
     permissionHandler: options.permissionHandler,
     transportHandler: copilotTransport,
+    // Copilot's "autopilot" session mode resolves session/prompt with `end_turn` and then
+    // keeps working, emitting the remaining output outside any client-owned generation.
+    // Opt in so those bounded continuations are projected instead of dropped.
+    providerAutonomousContinuation: {},
   };
 }
 

@@ -280,6 +280,19 @@ export type AcpRuntime = Readonly<{
    */
   isTurnInFlight: () => boolean;
   beginTurn: () => void;
+  /**
+   * Settle any in-flight provider-autonomous continuation projection.
+   *
+   * Copilot's autopilot mode keeps working after `session/prompt` resolves; that continuation
+   * is projected as its own turn outside the client prompt loop, so shutdown and test paths
+   * need an explicit join point.
+   */
+  waitForAutonomousContinuationIdle: () => Promise<void>;
+  /**
+   * Close an open provider-autonomous continuation and persist its transcript before the
+   * caller takes ownership of runtime turn state.
+   */
+  settleAutonomousContinuation: () => Promise<void>;
   cancel: () => Promise<void>;
   reset: () => Promise<void>;
   startOrLoad: (opts: { resumeId?: string | null; importHistory?: boolean; deferPendingDrain?: boolean }) => Promise<string>;
@@ -601,6 +614,17 @@ export function createAcpRuntime(params: {
   let pendingTurnOutcome: AcpTurnOutcome | null = null;
   let loadingSession = false;
   let turnInFlight = false;
+  /**
+   * Provider-autonomous continuation projection state.
+   *
+   * The backend opens a bounded continuation generation when a provider keeps working after
+   * `session/prompt` already resolved. The runtime projects that generation as its own
+   * transcript turn so continuation output is persisted instead of being attributed to the
+   * finished client turn or dropped entirely.
+   */
+  let autonomousContinuationInFlight = false;
+  let autonomousContinuationTail: Promise<void> = Promise.resolve();
+  let runtimeRef: AcpRuntime | null = null;
   let currentTurnId: string | null = null;
   let turnMediaGeneration = 0;
   let startOrLoadFlight: Readonly<{ intentKey: string; promise: Promise<string> }> | null = null;
@@ -1318,6 +1342,54 @@ export function createAcpRuntime(params: {
     publishProviderSessionInfo(pending.update, pending.observedAt);
   };
 
+  /** Flush the runtime turn that is currently projecting a provider-autonomous continuation. */
+  const flushAutonomousContinuationTurn = async (): Promise<void> => {
+    const runtime = runtimeRef;
+    if (!runtime) return;
+    await runtime.flushTurn();
+  };
+
+  /**
+   * Project a provider-owned autonomous continuation as its own transcript turn.
+   *
+   * Running the continuation as a discrete turn (rather than reopening the finished one)
+   * keeps every existing invariant: the previous turn's completion is already published and
+   * durable, the continuation gets a fresh provider turn id, and the maintained
+   * `task_complete` summary fallback applies per segment, so a stage-two summary is still
+   * persisted after a stage-one commentary turn without duplicating either row.
+   */
+  const handleAutonomousContinuationMessage = (msg: AgentMessage): boolean => {
+    if (msg.type !== 'event' || msg.name !== 'autonomous_continuation') return false;
+    const payload = asRecord(msg.payload);
+    const phase = typeof payload?.phase === 'string' ? payload.phase : '';
+    const runtime = runtimeRef;
+    if (!runtime) return true;
+
+    if (phase === 'started') {
+      // A client-owned turn always keeps ownership of its own output.
+      if (turnInFlight || loadingSession || autonomousContinuationInFlight) return true;
+      autonomousContinuationInFlight = true;
+      logger.debug(`[${params.provider}] Projecting provider-autonomous continuation as a new turn`);
+      runtime.beginTurn();
+      return true;
+    }
+
+    if (phase === 'ended') {
+      if (!autonomousContinuationInFlight) return true;
+      autonomousContinuationInFlight = false;
+      // Serialize continuation flushes so overlapping provider segments cannot interleave
+      // transcript writes with each other.
+      autonomousContinuationTail = autonomousContinuationTail
+        .then(flushAutonomousContinuationTurn)
+        .catch((error) => {
+          logger.debug(`[${params.provider}] Failed to flush autonomous continuation turn`, error);
+        });
+      return true;
+    }
+
+    return true;
+  };
+
   const attachMessageHandler = (b: AcpRuntimeBackend) => {
     messageForwarder?.dispose();
     const handlerGeneration = runtimeMetadataPublicationGeneration;
@@ -1348,6 +1420,7 @@ export function createAcpRuntime(params: {
     b.onMessage((msg: AgentMessage) => {
       if (handlerGeneration !== runtimeMetadataPublicationGeneration) return;
       if (handleProviderSessionInfoMessage(msg)) return;
+      if (handleAutonomousContinuationMessage(msg)) return;
       if (loadingSession) {
         if (msg.type === 'status' && msg.status === 'error') {
           turnAborted = true;
@@ -2210,7 +2283,7 @@ export function createAcpRuntime(params: {
     }
   };
 
-  return {
+  return runtimeRef = {
     getSessionId: () => sessionId,
     supportsInFlightSteer: () => inFlightSteerEnabled,
     isTurnInFlight: () => turnInFlight,
@@ -2703,6 +2776,35 @@ export function createAcpRuntime(params: {
 
       clearToolCallCache();
       resetTurnState();
+    },
+
+    /**
+     * Settle any in-flight provider-autonomous continuation projection.
+     *
+     * Exposed so tests and shutdown paths can await the continuation transcript flush that
+     * the provider, not the client prompt loop, initiated.
+     */
+    async waitForAutonomousContinuationIdle(): Promise<void> {
+      await autonomousContinuationTail;
+    },
+
+    /**
+     * Close an open autonomous continuation and persist its transcript before the caller
+     * takes ownership of the runtime turn state.
+     *
+     * The client prompt loop calls this before `beginTurn()`; without it a new prompt would
+     * reset turn state while continuation output was still unflushed.
+     */
+    async settleAutonomousContinuation(): Promise<void> {
+      if (autonomousContinuationInFlight) {
+        autonomousContinuationInFlight = false;
+        autonomousContinuationTail = autonomousContinuationTail
+          .then(flushAutonomousContinuationTurn)
+          .catch((error) => {
+            logger.debug(`[${params.provider}] Failed to flush autonomous continuation turn`, error);
+          });
+      }
+      await autonomousContinuationTail;
     },
   };
 }

@@ -35,6 +35,12 @@ describe('AcpBackend session/update max updates guard', () => {
       };
       fakeBackend.filterPromptTurnUpdatesByDispatch = (AcpBackend as any).prototype.filterPromptTurnUpdatesByDispatch;
       fakeBackend.createHandlerContext = (AcpBackend as any).prototype.createHandlerContext;
+      // Provider-autonomous continuation surface used by handleSessionUpdate. This fixture has
+      // an active dispatched generation, so these must observe (and never open) a continuation.
+      fakeBackend.resolveAutonomousContinuationLimits = (AcpBackend as any).prototype.resolveAutonomousContinuationLimits;
+      fakeBackend.maybeBeginAutonomousContinuation = (AcpBackend as any).prototype.maybeBeginAutonomousContinuation;
+      fakeBackend.isAutonomousContinuationActive = (AcpBackend as any).prototype.isAutonomousContinuationActive;
+      fakeBackend.autonomousContinuationGeneration = null;
 
       const handleSessionUpdate = (AcpBackend as any).prototype.handleSessionUpdate as (params: any) => void;
       handleSessionUpdate.call(fakeBackend, {
@@ -78,6 +84,11 @@ describe('AcpBackend session/update max updates guard', () => {
       turnGeneration: 0,
       dispatchedPromptTurnGeneration: null,
       filterPromptTurnUpdatesByDispatch: (AcpBackend as any).prototype.filterPromptTurnUpdatesByDispatch,
+      // A replay capture must never open a provider-autonomous continuation.
+      autonomousContinuationGeneration: null,
+      resolveAutonomousContinuationLimits: (AcpBackend as any).prototype.resolveAutonomousContinuationLimits,
+      maybeBeginAutonomousContinuation: (AcpBackend as any).prototype.maybeBeginAutonomousContinuation,
+      isAutonomousContinuationActive: (AcpBackend as any).prototype.isAutonomousContinuationActive,
     };
 
     await (AcpBackend as any).prototype.handleSessionUpdate.call(fakeBackend, {

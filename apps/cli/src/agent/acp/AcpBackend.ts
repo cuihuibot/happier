@@ -414,6 +414,21 @@ function isPromptTurnSessionUpdateType(sessionUpdateType: string | undefined): b
     || sessionUpdateType === 'plan';
 }
 
+/**
+ * A completed `task_complete` tool call, which is how Copilot's autopilot mode reports that
+ * an autonomous run has finished.
+ */
+function isTerminalTaskCompleteUpdate(update: unknown): boolean {
+  const record = asRecord(update);
+  if (!record) return false;
+  const sessionUpdateType = typeof record.sessionUpdate === 'string' ? record.sessionUpdate : '';
+  if (sessionUpdateType !== 'tool_call' && sessionUpdateType !== 'tool_call_update') return false;
+  if (record.status !== 'completed' && record.status !== 'failed') return false;
+  const title = typeof record.title === 'string' ? record.title : '';
+  const toolName = typeof record.toolName === 'string' ? record.toolName : '';
+  return title === 'task_complete' || toolName === 'task_complete';
+}
+
 function getString(obj: Record<string, unknown>, key: string): string | null {
   const value = obj[key];
   return typeof value === 'string' ? value : null;
@@ -721,7 +736,38 @@ export interface AcpBackendOptions {
 
   /** Provider-owned projection for non-standard prompt usage fields and accounting semantics. */
   promptUsageAdapter?: AcpPromptUsageAdapter;
+
+  /**
+   * Opt-in for providers that keep working after `session/prompt` has already resolved.
+   *
+   * GitHub Copilot's "autopilot" session mode resolves the prompt turn with
+   * `stopReason: end_turn` and then autonomously continues, emitting further prompt-turn
+   * `session/update` notifications outside any client-owned generation. Without this
+   * option those notifications stay dropped by the global dispatch guard.
+   *
+   * Enabling it does not weaken the guard. A continuation is opened only by an actual
+   * prompt-turn notification for the matching ACP session after a *successfully completed*
+   * turn, and never after cancellation, refusal, failure, timeout, disposal or during
+   * `loadSession` replay.
+   */
+  providerAutonomousContinuation?: AcpProviderAutonomousContinuationOptions;
 }
+
+export type AcpProviderAutonomousContinuationOptions = Readonly<{
+  /** Maximum autonomous continuation segments accepted per completed client prompt turn. */
+  maxPerTurn?: number;
+  /**
+   * Inactivity budget that closes an open continuation segment.
+   *
+   * This is a stall budget, not completion proof: the segment's output has already been
+   * projected when it elapses, so closing early can never drop provider output. It exists
+   * because ACP v1 has no continuation-end notification to observe.
+   */
+  stallMs?: number;
+}>;
+
+const DEFAULT_AUTONOMOUS_CONTINUATIONS_PER_TURN = 8;
+const DEFAULT_AUTONOMOUS_CONTINUATION_STALL_MS = 2000;
 
 export type AcpSteerDeliveryIdentity = Readonly<{
   localId?: string | null;
@@ -845,6 +891,19 @@ export class AcpBackend implements AgentBackend {
     generation: number;
     settled: Promise<void>;
   }> | null = null;
+
+  /**
+   * Provider-autonomous continuation state.
+   *
+   * `armedGeneration` is the completed turn generation that is allowed to be followed by a
+   * provider-owned continuation. It is set only on a successful completion and cleared by any
+   * client prompt, cancellation, failure or disposal.
+   */
+  private autonomousContinuationArmedGeneration: number | null = null;
+  private autonomousContinuationRemaining = 0;
+  private autonomousContinuationId: string | null = null;
+  private autonomousContinuationGeneration: number | null = null;
+  private autonomousContinuationStallTimeout: NodeJS.Timeout | null = null;
 
   /** Transport handler for agent-specific behavior */
   private readonly transport: TransportHandler;
@@ -1979,6 +2038,14 @@ export class AcpBackend implements AgentBackend {
       }
     }
 
+    // A provider that keeps working after its prompt turn resolved (Copilot "autopilot")
+    // re-opens a bounded, explicitly signalled continuation generation here. When it does
+    // not, the global dispatch guard below still drops the notification.
+    this.maybeBeginAutonomousContinuation(
+      updateCandidates,
+      typeof raw.sessionId === 'string' ? raw.sessionId : null,
+    );
+
     const processableUpdateCandidates = this.filterPromptTurnUpdatesByDispatch(updateCandidates);
 
     if (processableUpdateCandidates.length === 0) {
@@ -2341,6 +2408,13 @@ export class AcpBackend implements AgentBackend {
       }
       await handleOneUpdate(update);
     }
+
+    // Copilot's autopilot run terminates with a completed `task_complete` tool call. Closing
+    // on that explicit provider signal keeps the busy state accurate without waiting for the
+    // inactivity budget.
+    if (this.isAutonomousContinuationActive() && normalizedUpdates.some(isTerminalTaskCompleteUpdate)) {
+      this.endAutonomousContinuation('task_complete');
+    }
   }
 
   private seedSessionModesFromSessionResponse(sessionResponse: unknown): void {
@@ -2642,6 +2716,7 @@ export class AcpBackend implements AgentBackend {
     this.plans.finalizeTurn(resolveAcpPlanTurnId(this.turnGeneration));
     this.closeCurrentTurnGeneration();
     this.waitingForResponse = false;
+    this.armAutonomousContinuation(outcome);
 
     if (outcome.kind !== 'timed_out') {
       this.emit({ type: 'status', status: 'idle' });
@@ -2706,6 +2781,181 @@ export class AcpBackend implements AgentBackend {
       const sessionUpdateType = typeof record?.sessionUpdate === 'string' ? record.sessionUpdate : undefined;
       return !isPromptTurnSessionUpdateType(sessionUpdateType);
     });
+  }
+
+  private resolveAutonomousContinuationLimits(): Readonly<{ maxPerTurn: number; stallMs: number }> | null {
+    const options = this.options.providerAutonomousContinuation;
+    if (!options) return null;
+
+    const readPositiveInt = (raw: unknown, fallback: number, cap: number): number => {
+      const parsed = typeof raw === 'number' ? raw : Number.parseInt(String(raw ?? '').trim(), 10);
+      if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+      return Math.min(Math.trunc(parsed), cap);
+    };
+
+    return {
+      maxPerTurn: readPositiveInt(
+        process.env.HAPPIER_ACP_MAX_AUTONOMOUS_CONTINUATIONS ?? options.maxPerTurn,
+        DEFAULT_AUTONOMOUS_CONTINUATIONS_PER_TURN,
+        1000,
+      ),
+      stallMs: readPositiveInt(
+        process.env.HAPPIER_ACP_AUTONOMOUS_CONTINUATION_STALL_MS ?? options.stallMs,
+        DEFAULT_AUTONOMOUS_CONTINUATION_STALL_MS,
+        120_000,
+      ),
+    };
+  }
+
+  /**
+   * Allow the just-completed generation to be followed by provider-owned continuations.
+   *
+   * Arming does not make the session busy and does not hold any waiter open: the turn is
+   * reported complete exactly as before. It only records that a *specific* completed
+   * generation may legitimately be followed by more provider output.
+   */
+  private armAutonomousContinuation(outcome: AcpTurnOutcome): void {
+    const limits = this.resolveAutonomousContinuationLimits();
+    if (!limits || this.disposed || this.replayCapture || outcome.kind !== 'completed') {
+      this.autonomousContinuationArmedGeneration = null;
+      this.autonomousContinuationRemaining = 0;
+      return;
+    }
+    this.autonomousContinuationArmedGeneration = this.turnGeneration;
+    this.autonomousContinuationRemaining = limits.maxPerTurn;
+  }
+
+  private disarmAutonomousContinuation(reason: string): void {
+    if (this.autonomousContinuationGeneration !== null) {
+      this.endAutonomousContinuation(reason);
+    }
+    this.autonomousContinuationArmedGeneration = null;
+    this.autonomousContinuationRemaining = 0;
+  }
+
+  private isAutonomousContinuationActive(): boolean {
+    return this.autonomousContinuationGeneration !== null
+      && this.autonomousContinuationGeneration === this.turnGeneration;
+  }
+
+  /**
+   * Open a bounded continuation generation for provider output that arrives after the
+   * client-owned prompt turn already completed.
+   *
+   * The trigger is an explicit prompt-turn notification, never a timer and never an
+   * unrelated signal such as `usage_update`. Every existing turn guard still applies: the
+   * continuation runs as its own generation, so cancellation, closure, disposal and
+   * next-prompt supersession reject it exactly like a client-owned turn.
+   */
+  private maybeBeginAutonomousContinuation(
+    updateCandidates: readonly unknown[],
+    notificationSessionId: string | null,
+  ): boolean {
+    if (this.isAutonomousContinuationActive()) {
+      this.bumpAutonomousContinuationStall();
+      return false;
+    }
+
+    const limits = this.resolveAutonomousContinuationLimits();
+    if (!limits) return false;
+    if (this.disposed || this.replayCapture) return false;
+    // A client prompt owns the session while it is pending or still settling.
+    if (this.waitingForResponse || this.activePromptRpc) return false;
+    if (this.autonomousContinuationArmedGeneration !== this.turnGeneration) return false;
+    if (this.autonomousContinuationRemaining <= 0) return false;
+    if (notificationSessionId !== null && notificationSessionId !== this.acpSessionId) return false;
+
+    const hasPromptTurnUpdate = updateCandidates.some((update) => {
+      const record = asRecord(update);
+      const sessionUpdateType = typeof record?.sessionUpdate === 'string' ? record.sessionUpdate : undefined;
+      return isPromptTurnSessionUpdateType(sessionUpdateType);
+    });
+    if (!hasPromptTurnUpdate) return false;
+
+    const continuationId = randomUUID();
+    const previousGeneration = this.turnGeneration;
+    const turnGeneration = this.turnGeneration + 1;
+    this.turnGeneration = turnGeneration;
+    this.closedTurnGeneration = null;
+    this.dispatchedPromptTurnGeneration = turnGeneration;
+    this.autonomousContinuationGeneration = turnGeneration;
+    this.autonomousContinuationId = continuationId;
+    this.autonomousContinuationArmedGeneration = null;
+    this.autonomousContinuationRemaining -= 1;
+    this.pendingTurnOutcome = null;
+    this.lastTurnOutcome = null;
+    this.permissionFlushTurnGeneration = null;
+    this.toolCallCountSincePrompt = 0;
+
+    logger.debug(
+      `[AcpBackend] Opening provider-autonomous continuation ${continuationId} after completed generation ${previousGeneration}`,
+    );
+    this.emit({ type: 'status', status: 'running' });
+    this.emit({
+      type: 'event',
+      name: 'autonomous_continuation',
+      payload: { phase: 'started', continuationId },
+    });
+    this.bumpAutonomousContinuationStall();
+    return true;
+  }
+
+  /**
+   * Restart the inactivity budget that closes an open continuation.
+   *
+   * ACP v1 has no continuation-end notification, so a silent provider is the only
+   * observable end of an autonomous run that never calls `task_complete`. Output is already
+   * projected before this fires, so it bounds the busy state without gating delivery.
+   */
+  private bumpAutonomousContinuationStall(): void {
+    const limits = this.resolveAutonomousContinuationLimits();
+    if (!limits || !this.isAutonomousContinuationActive()) return;
+
+    if (this.autonomousContinuationStallTimeout) {
+      clearTimeout(this.autonomousContinuationStallTimeout);
+      this.autonomousContinuationStallTimeout = null;
+    }
+    const generation = this.turnGeneration;
+    this.autonomousContinuationStallTimeout = setTimeout(() => {
+      this.autonomousContinuationStallTimeout = null;
+      if (this.turnGeneration !== generation) return;
+      this.endAutonomousContinuation('inactivity');
+    }, limits.stallMs);
+    this.autonomousContinuationStallTimeout.unref?.();
+  }
+
+  /** Close an open continuation generation and hand the session back to the client. */
+  private endAutonomousContinuation(reason: string): void {
+    const continuationId = this.autonomousContinuationId;
+    const generation = this.autonomousContinuationGeneration;
+    if (generation === null) return;
+
+    if (this.autonomousContinuationStallTimeout) {
+      clearTimeout(this.autonomousContinuationStallTimeout);
+      this.autonomousContinuationStallTimeout = null;
+    }
+    this.autonomousContinuationGeneration = null;
+    this.autonomousContinuationId = null;
+
+    if (generation === this.turnGeneration) {
+      this.plans.finalizeTurn(resolveAcpPlanTurnId(generation));
+      this.closeCurrentTurnGeneration();
+      this.clearActiveToolCallStateForTerminalTurn(`autonomous continuation ended (${reason})`);
+      // Another continuation may still follow within the remaining budget.
+      if (this.autonomousContinuationRemaining > 0 && !this.disposed) {
+        this.autonomousContinuationArmedGeneration = generation;
+      }
+    }
+
+    logger.debug(`[AcpBackend] Closed provider-autonomous continuation ${continuationId} (${reason})`);
+    this.emit({
+      type: 'event',
+      name: 'autonomous_continuation',
+      payload: { phase: 'ended', continuationId, reason },
+    });
+    if (!this.disposed) {
+      this.emit({ type: 'status', status: 'idle' });
+    }
   }
 
   private resolvePermissionFlushReasonForOutcome(outcome: AcpTurnOutcome): string {
@@ -2780,6 +3030,7 @@ export class AcpBackend implements AgentBackend {
     }
     this.responseCompletionError = error;
     this.waitingForResponse = false;
+    this.disarmAutonomousContinuation('turn failed');
     if (this.promptCompletionSettlement?.generation === this.turnGeneration) {
       this.promptCompletionSettlement = null;
     }
@@ -2859,6 +3110,9 @@ export class AcpBackend implements AgentBackend {
     if (promptHasChangeTitle) {
       logger.debug('[AcpBackend] Prompt contains change_title instruction - will auto-approve first "other" tool call if it matches pattern');
     }
+
+    // A client prompt always supersedes any provider-owned continuation window.
+    this.disarmAutonomousContinuation('superseded by client prompt');
 
     this.emit({ type: 'status', status: 'running' });
     const turnGeneration = this.turnGeneration + 1;
@@ -3595,6 +3849,7 @@ export class AcpBackend implements AgentBackend {
 
   async cancel(sessionId: SessionId): Promise<void> {
     this.promptCompletionSettlement = null;
+    this.disarmAutonomousContinuation('cancelled by user');
     if (this.waitingForResponse) {
       this.failPendingResponseWait(makeAbortError('Cancelled by user'));
     } else {
@@ -3673,6 +3928,7 @@ export class AcpBackend implements AgentBackend {
     
     logger.debug('[AcpBackend] Disposing backend');
     this.disposed = true;
+    this.disarmAutonomousContinuation('backend disposed');
 
     if (this.waitingForResponse || this.responseCompletionTimeout) {
       this.failPendingResponseWait(makeAbortError('Backend disposed'));
