@@ -123,6 +123,7 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
         kind: 'persist-bound' as const,
         persistBound: publisher.persistBound,
         confirmVendorSessionDurable: publisher.confirmVendorSessionDurable,
+        invalidateBound: publisher.invalidateBound,
       };
     }
     if (params.sessionIdentity.kind === 'custom') {

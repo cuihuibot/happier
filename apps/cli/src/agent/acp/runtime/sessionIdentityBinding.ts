@@ -22,6 +22,13 @@ export type AcpSessionIdentityPublication =
       generation: number;
       vendorSessionId: string;
     }>) => Promise<void>;
+    /**
+     * Remove the durable resume projection for a vendor session that must never be resumed.
+     *
+     * Supplied only where the resume target is persisted, because only a persisted target can
+     * outlive the process and be handed to a later cold start.
+     */
+    invalidateBound?: (vendorSessionId: string) => Promise<void>;
   }>
   | Readonly<{ kind: 'external-owner' }>
   | Readonly<{

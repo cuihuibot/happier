@@ -778,12 +778,22 @@ export type AcpProviderAutonomousContinuationOptions = Readonly<{
  * Every other outcome is an interruption or a safety stop, and the runtime must project it
  * as an explicitly incomplete turn rather than as a successful one.
  */
-export type AcpAutonomousContinuationEndOutcome =
-  | 'completed'
+export type AcpAutonomousContinuationEndOutcome =  | 'completed'
   | 'timed_out'
   | 'limit_exceeded'
   | 'cancelled'
   | 'failed';
+
+/**
+ * A provider session that cancellation retired and that must never be resumed again.
+ *
+ * The provider still owns the unfinished job inside it, so any later resume of this id — warm
+ * or from a fresh process — hands the cancelled work straight back.
+ */
+export type AcpRetiredProviderSession = Readonly<{
+  vendorSessionId: string;
+  reason: 'cancelled-uncancellable-work';
+}>;
 
 const DEFAULT_AUTONOMOUS_CONTINUATIONS_PER_TURN = 8;
 const DEFAULT_AUTONOMOUS_CONTINUATION_STALL_MS = 30_000;
@@ -856,6 +866,10 @@ export class AcpBackend implements AgentBackend {
    * only sound answer is to stop resuming that provider session.
    */
   private providerSessionResumePoisoned = false;
+
+  private providerSessionRetirementHandler:
+    | ((retired: AcpRetiredProviderSession) => Promise<void>)
+    | null = null;
   /**
    * Identifies the current provider connection.
    *
@@ -1016,6 +1030,19 @@ export class AcpBackend implements AgentBackend {
     publisher: (snapshot: NormalizedAcpPlanSnapshot) => Promise<void>,
   ): void {
     this.planStatePublisher = publisher;
+  }
+
+  /**
+   * Register the owner of a provider session that cancellation had to retire.
+   *
+   * The backend knows *that* a provider session can never be resumed again, but the durable
+   * projection of that id and the user-visible transcript live outside it, so retirement has
+   * to be handed to the runtime before the cancellation is reported as done.
+   */
+  setProviderSessionRetirementHandler(
+    handler: (retired: AcpRetiredProviderSession) => Promise<void>,
+  ): void {
+    this.providerSessionRetirementHandler = handler;
   }
 
   onMessage(handler: AgentMessageHandler): void {
@@ -4120,8 +4147,31 @@ export class AcpBackend implements AgentBackend {
       // The provider still owns the unfinished job inside its session, so resuming that session
       // would hand the cancelled work straight back. The next open must be a fresh session.
       this.providerSessionResumePoisoned = true;
+      const retiredVendorSessionId = this.acpSessionId;
       await this.cleanupInitializedProcessConnection({ graceMs: 250 });
       this.activePromptRpc = null;
+      // The in-memory flag above only protects this process. The same id is also projected into
+      // durable session metadata, and a cold start reads it back as `--resume`, so the
+      // cancellation does not actually hold until that projection is gone. This is awaited
+      // before the stop is announced: announcing a completed cancellation while a resumable
+      // pointer to the cancelled work survives would announce a state that does not exist.
+      if (this.providerSessionRetirementHandler && retiredVendorSessionId) {
+        try {
+          await this.providerSessionRetirementHandler({
+            vendorSessionId: retiredVendorSessionId,
+            reason: 'cancelled-uncancellable-work',
+          });
+        } catch (error) {
+          logger.debug('[AcpBackend] Failed to retire the durable provider session projection', error);
+          this.emit({
+            type: 'status',
+            status: 'error',
+            detail: 'Cancelled, but this session could not be permanently disconnected from the '
+              + 'cancelled background work. Restarting it may resume that work; start a new session instead.',
+          });
+          return;
+        }
+      }
       this.emit({ type: 'status', status: 'stopped', detail: 'Cancelled by user' });
       return;
     }

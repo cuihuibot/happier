@@ -115,5 +115,48 @@ export function createVendorResumeIdMetadataPublisher(params: Readonly<{
     }
   };
 
-  return { persistBound, confirmVendorSessionDurable };
+  /**
+   * Remove the durable resume projection for a provider session that must never be resumed
+   * again, such as one retired because cancellation could not stop its autonomous work.
+   *
+   * This is a compare-and-clear: only the named id is removed. After a retirement the same
+   * Happier session immediately opens a *fresh* provider session, and that replacement still
+   * has to be publishable, so an unconditional clear would either race the replacement or
+   * destroy a healthy resume target. A deferred binding for the same id is dropped too,
+   * because publishing it later would restore exactly the projection being invalidated.
+   *
+   * Write failures propagate. A caller that reports cancellation as complete while a resumable
+   * pointer to the cancelled work survives on disk would be reporting a state that does not
+   * exist.
+   */
+  const invalidateBound = async (vendorSessionId: string): Promise<void> => {
+    const target = typeof vendorSessionId === 'string' ? vendorSessionId.trim() : '';
+    if (!target) return;
+
+    if (inFlight) {
+      // Let an open write land first, otherwise the clear can be silently overwritten by it.
+      await inFlight.promise.catch(() => {});
+    }
+    if (deferred?.vendorSessionId === target) deferred = null;
+
+    const metadataSnapshot = params.getMetadataSnapshot();
+    const persistedResumeId = metadataSnapshot
+      ? (metadataSnapshot as unknown as Readonly<Record<string, unknown>>)[metadataField]
+      : undefined;
+    const persistedMatches = typeof persistedResumeId === 'string' && persistedResumeId.trim() === target;
+    if (published?.vendorSessionId === target) published = null;
+    if (!persistedMatches) return;
+
+    await Promise.resolve(params.updateMetadata((metadata) => {
+      const current = (metadata as unknown as Readonly<Record<string, unknown>>)[metadataField];
+      // Re-check against the updater's own view: a concurrent publication may have replaced the
+      // retired id with the fresh session between the snapshot read and this update.
+      if (typeof current !== 'string' || current.trim() !== target) return metadata;
+      const next = { ...(metadata as unknown as Record<string, unknown>) };
+      delete next[metadataField];
+      return next as typeof metadata;
+    }));
+  };
+
+  return { persistBound, confirmVendorSessionDurable, invalidateBound };
 }
