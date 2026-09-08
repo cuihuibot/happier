@@ -846,6 +846,17 @@ export class AcpBackend implements AgentBackend {
    */
   private providerConnectionForceClosed = false;
   /**
+   * True when the provider session behind this backend must never be resumed again.
+   *
+   * Retiring the transport stops a cancelled autonomous job from *delivering* anything, but the
+   * provider keeps that unfinished job in its own session state. Live evidence: after a
+   * cancellation retirement, `session/load` of the same provider session id restored the
+   * cancelled instruction, and the provider re-ran the whole plan under the next prompt's turn
+   * with brand-new tool call ids. Resuming is therefore how cancelled work comes back, and the
+   * only sound answer is to stop resuming that provider session.
+   */
+  private providerSessionResumePoisoned = false;
+  /**
    * Identifies the current provider connection.
    *
    * ACP `session/update` notifications carry only `sessionId` and `update`; there is no
@@ -1833,6 +1844,7 @@ export class AcpBackend implements AgentBackend {
       }
       this.acpSessionId = sessionId;
       this.providerConnectionForceClosed = false;
+      this.providerSessionResumePoisoned = false;
       logger.debug(`[AcpBackend] Session created: ${sessionId}`);
 
       this.seedSessionModesFromSessionResponse(sessionResponse);
@@ -1926,6 +1938,7 @@ export class AcpBackend implements AgentBackend {
 
       this.acpSessionId = normalized;
       this.providerConnectionForceClosed = false;
+      this.providerSessionResumePoisoned = false;
       logger.debug(`[AcpBackend] Session loaded: ${normalized}`);
 
       this.seedSessionModesFromSessionResponse(sessionResponse);
@@ -2003,6 +2016,7 @@ export class AcpBackend implements AgentBackend {
 
       this.acpSessionId = forkedSessionId;
       this.providerConnectionForceClosed = false;
+      this.providerSessionResumePoisoned = false;
       this.seedSessionModesFromSessionResponse(response);
       this.seedSessionModelsFromSessionResponse(response);
       this.seedSessionConfigOptionsFromSessionResponse(response);
@@ -4086,6 +4100,9 @@ export class AcpBackend implements AgentBackend {
         '[AcpBackend] Cancelled provider-autonomous work that ACP cannot cancel; retiring the provider connection',
       );
       this.providerConnectionForceClosed = true;
+      // The provider still owns the unfinished job inside its session, so resuming that session
+      // would hand the cancelled work straight back. The next open must be a fresh session.
+      this.providerSessionResumePoisoned = true;
       await this.cleanupInitializedProcessConnection({ graceMs: 250 });
       this.activePromptRpc = null;
       this.emit({ type: 'status', status: 'stopped', detail: 'Cancelled by user' });
@@ -4143,6 +4160,15 @@ export class AcpBackend implements AgentBackend {
    */
   isProviderConnectionForceClosed(): boolean {
     return this.providerConnectionForceClosed;
+  }
+
+  /**
+   * True when resuming this backend's provider session would resurrect cancelled work.
+   *
+   * The caller reads this before resetting, because the reset replaces this backend instance.
+   */
+  isProviderSessionResumePoisoned(): boolean {
+    return this.providerSessionResumePoisoned;
   }
 
   async respondToPermission(requestId: string, approved: boolean): Promise<void> {

@@ -213,6 +213,28 @@ describe('cancelled autonomous work ownership', () => {
     h.backend.dispose?.();
   });
 
+  it('poisons the provider session so resuming cannot resurrect the cancelled job', async () => {
+    const h = await createRuntimeHarness();
+
+    completePromptTurn(h.backend);
+    await pushUpdate(h.backend, slowToolCall);
+    expect(h.backend.isProviderSessionResumePoisoned()).toBe(false);
+
+    await h.backend.cancel(SESSION_ID as never);
+
+    // Live on native v7: retirement stopped the old connection, but the recovery resumed the
+    // same provider session id, the provider restored the cancelled instruction and re-ran the
+    // entire plan under the next prompt's turn with brand-new tool call ids. Retiring the
+    // transport is therefore necessary but not sufficient; the provider session must be
+    // abandoned too.
+    expect(
+      h.backend.isProviderSessionResumePoisoned(),
+      'a resumed provider session hands the cancelled work straight back',
+    ).toBe(true);
+
+    h.backend.dispose?.();
+  });
+
   it('keeps cooperative prompt-turn cancellation on the connection', async () => {
     const h = await createRuntimeHarness();
     const internals = h.backend as unknown as Record<string, unknown>;
@@ -230,6 +252,10 @@ describe('cancelled autonomous work ownership', () => {
       'a cooperative cancellation must not retire a healthy provider connection',
     ).toBe(false);
     expect(internals.connection).not.toBeNull();
+    expect(
+      h.backend.isProviderSessionResumePoisoned(),
+      'a cooperatively cancelled session keeps its provider context and stays resumable',
+    ).toBe(false);
 
     h.backend.dispose?.();
   });

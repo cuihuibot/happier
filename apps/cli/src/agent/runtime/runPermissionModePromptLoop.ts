@@ -50,6 +50,7 @@ type PromptRuntime = {
    * the runtime is usable and must not be restarted.
    */
   isProviderConnectionForceClosed?: () => boolean;
+  isProviderSessionResumePoisoned?: () => boolean;
   shouldResumeAfterPermissionModeChange?: () => boolean;
 };
 
@@ -293,11 +294,23 @@ export async function runPermissionModePromptLoop(opts: {
       // through the existing reset-and-resume path instead of stranding the live session on a
       // backend that rejects every prompt.
       const resumeId = readNonBlankOpaqueIdentifier(opts.runtime.getSessionId()) ?? '';
-      opts.messageBuffer.addMessage(`Reconnecting ${opts.providerName} session…`, 'status');
+      // Read before the reset, because the reset replaces the backend that owns the flag.
+      const resumePoisoned = opts.runtime.isProviderSessionResumePoisoned?.() === true;
+      opts.messageBuffer.addMessage(
+        resumePoisoned
+          ? `Starting a fresh ${opts.providerName} session after cancellation…`
+          : `Reconnecting ${opts.providerName} session…`,
+        'status',
+      );
       await opts.runtime.reset();
       wasStarted = false;
       if (opts.shouldExit()) return { startedFreshSessionForTurn: false };
-      storedSessionIdForResume = resumeId ? { value: resumeId, origin: 'restart' } : null;
+      // Resuming a poisoned provider session restores the cancelled task into provider context,
+      // and the provider then re-runs it as new autonomous work under the next turn. Opening a
+      // fresh provider session is the only way the cancellation actually holds.
+      storedSessionIdForResume = resumeId && !resumePoisoned
+        ? { value: resumeId, origin: 'restart' }
+        : null;
       await opts.onAfterReset?.();
       if (opts.shouldExit()) return { startedFreshSessionForTurn: false };
     }
