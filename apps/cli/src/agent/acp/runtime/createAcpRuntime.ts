@@ -8,6 +8,7 @@ import {
   AcpPromptSubmissionPhaseError,
   type AcpPermissionHandler,
   type AcpPromptSubmissionEvidence,
+  type AcpRetiredProviderSession,
   type SessionConfigOption,
 } from '@/agent/acp/AcpBackend';
 import type { AcpTurnOutcome } from '@/agent/acp/backend/turn/_types';
@@ -427,6 +428,10 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
   setPlanStatePublisher?: (
     publisher: (snapshot: NormalizedAcpPlanSnapshot) => Promise<void>,
   ) => void;
+  /** Register the owner of a provider session that cancellation had to retire. */
+  setProviderSessionRetirementHandler?: (
+    handler: (retired: AcpRetiredProviderSession) => Promise<void>,
+  ) => void;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -758,6 +763,46 @@ export function createAcpRuntime(params: {
   const confirmVendorSessionDurable = params.sessionIdentity.kind === 'persist-bound'
     ? params.sessionIdentity.confirmVendorSessionDurable ?? null
     : null;
+
+  const invalidateVendorSessionResume = params.sessionIdentity.kind === 'persist-bound'
+    ? params.sessionIdentity.invalidateBound ?? null
+    : null;
+
+  /**
+   * Handle a provider session the backend had to retire because cancellation could not stop
+   * its autonomous work.
+   *
+   * Two things must survive the current process. The durable resume projection has to go, or a
+   * later cold start is spawned with `--resume <retired id>` and hands the cancelled goal back
+   * to the provider, which re-runs it as new autonomous work. And the user has to be able to
+   * see, in the transcript itself, that the next turn starts from a fresh provider context —
+   * a terminal-only status line is lost with the process that printed it.
+   *
+   * Failures propagate to the caller: reporting a completed cancellation while a resumable
+   * pointer to the cancelled work is still on disk would be reporting a state that is not real.
+   */
+  const handleProviderSessionRetired = async (retired: Readonly<{
+    vendorSessionId: string;
+    reason: 'cancelled-uncancellable-work';
+  }>): Promise<void> => {
+    const vendorSessionId = readNonBlankOpaqueIdentifier(retired.vendorSessionId) ?? '';
+    if (vendorSessionId && invalidateVendorSessionResume) {
+      await invalidateVendorSessionResume(vendorSessionId);
+    }
+    // Opaque provider identifiers stay out of the user-visible notice and out of the log line.
+    logger.debug(`[${params.provider}] Invalidated the durable resume projection for a retired provider session`);
+    try {
+      params.session.sendSessionEvent?.({
+        type: 'message',
+        message: 'Cancelled. The agent could not stop its background work, so this session was '
+          + 'disconnected from it and the next message starts a fresh agent context. Earlier '
+          + 'messages above are unchanged, but the agent will not remember them.',
+      });
+    } catch (error) {
+      // The durable invalidation is the safety property; the notice is an explanation of it.
+      logger.debug(`[${params.provider}] Failed to publish the retired-session notice (non-fatal)`, error);
+    }
+  };
 
   /**
    * A turn that reached its end boundary is the point at which an Agent that
@@ -2112,6 +2157,7 @@ export function createAcpRuntime(params: {
           }) as typeof metadata
         )));
       });
+      created.setProviderSessionRetirementHandler?.(handleProviderSessionRetired);
       backend = created;
       attachMessageHandler(created);
       logger.debug(`[${params.provider}] ACP backend created`);

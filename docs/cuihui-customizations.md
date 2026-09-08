@@ -423,14 +423,67 @@ Truthful limits:
 - Because the fresh session is not the old one, provider-side context from
   before the cancellation is dropped. The Happier transcript remains the source
   of truth, and as stated above provider-side context was never guaranteed.
-- The poison is held for the life of the running session process. If that
-  process is restarted between the cancellation and the next prompt, a cold
-  start can still resume the old provider session id from its stored resume
-  reference. Cancel-then-restart-then-prompt is therefore not covered.
+- The poison is durable, not process-lived. See "Durable retirement" below.
 - Owner-visible tradeoff: because an autopilot turn cancellation now retires the
   provider session, cancelling in an autopilot session discards provider-side
   context and makes the next prompt pay a provider restart. That is the cost of
   the cancellation actually holding. Ordinary-mode cancellation is unchanged.
+
+### Durable retirement (cancel → restart → prompt)
+
+An in-memory flag only protects the running session process. The retired
+provider session id is also projected into durable session metadata
+(`metadata.copilotSessionId`, the manifest-declared `vendorResumeIdField`), and
+the daemon reads that projection back when it respawns a stopped session,
+spawning the CLI with `--resume <id>`.
+
+That was confirmed live on native v9. Happier session
+`cmtsxu3at0lulnpp8fncwziga` completed a turn, an autopilot continuation was
+cancelled and the backend logged `retiring the provider connection`, the session
+process was stopped, and the next prompt respawned it with `hasResume:true` and
+`--resume` naming the **retired** provider session. Combined with the v7 result
+above — that resuming such a session restores the cancelled goal and re-runs the
+whole plan — cancel-then-restart-then-prompt could hand cancelled work back.
+
+The retirement is therefore also durable:
+
+- `createVendorResumeIdMetadataPublisher` gained `invalidateBound(id)`, a
+  **compare-and-clear** that removes the resume field only when it still names
+  the retired id, and drops any deferred binding for it. Compare-and-clear
+  matters because the in-process recovery immediately opens a *fresh* provider
+  session whose id must still be publishable.
+- `AcpBackend.cancel()` hands the retired id to the runtime through
+  `setProviderSessionRetirementHandler` and **awaits** it before emitting
+  `stopped`. Announcing a completed cancellation while a resumable pointer to
+  the cancelled work is still on disk would announce a state that does not
+  exist.
+- If the metadata write fails, the backend emits `status: error` explaining that
+  the session could not be permanently disconnected, instead of a clean stop.
+- No cold-start consumer changed. An absent resume field already resolves to an
+  empty `effectiveResume`, so no `--resume` argument is produced. That path was
+  observed live: a session whose resume id had never been published respawned
+  with `hasResume:false` and did not resurrect its cancelled plan.
+- Opaque provider identifiers are not written to logs or to the user-visible
+  notice.
+
+Because the fresh provider context is a real, user-affecting consequence, it is
+now recorded **in the transcript** rather than only in the terminal buffer. The
+runtime publishes a durable session event (`sendSessionEvent({ type: 'message' })`,
+the same mechanism as other durable notices) stating that the agent could not be
+stopped, that the session was disconnected from that work, and that the next
+message starts a fresh agent context with earlier messages retained but not
+remembered by the agent. It is not an assistant answer, it does not alter
+history, and it never replays the cancelled instruction.
+
+Truthful limits of the durable retirement:
+
+- It guarantees the cancelled provider session is never resumed again. It still
+  does not prove the provider process stopped computing.
+- Ordinary-mode cancellation keeps its resume projection, because ordinary-mode
+  work really does stop; this was verified as a live control in round 5.
+- The metadata write is best-effort at the transport level: a write that is
+  accepted locally but lost server-side would not be detected here. A write that
+  fails outright is surfaced as the error status above.
 
 ### Regression coverage
 
@@ -443,8 +496,10 @@ yarn vitest run \
   src/agent/acp/runtime/__tests__/createAcpRuntime.continuationCap.test.ts \
   src/agent/acp/runtime/__tests__/createAcpRuntime.sameTurnSummary.test.ts \
   src/agent/acp/__tests__/AcpBackend.cancelForceClose.test.ts \
-  src/agent/runtime/runPermissionModePromptLoop.cancellationLivelock.test.ts
-yarn vitest run src/agent/acp src/backends/copilot src/agent/runtime
+  src/agent/runtime/runPermissionModePromptLoop.cancellationLivelock.test.ts \
+  src/agent/acp/runtime/__tests__/createAcpRuntime.retiredSessionDurability.test.ts \
+  src/session/metadata/createVendorResumeIdMetadataPublisher.retirement.test.ts
+yarn vitest run src/agent/acp src/backends/copilot src/agent/runtime src/session
 yarn typecheck
 ```
 
