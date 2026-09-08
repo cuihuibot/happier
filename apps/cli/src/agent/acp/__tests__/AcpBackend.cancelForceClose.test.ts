@@ -3,6 +3,11 @@ import type { PromptResponse } from '@agentclientprotocol/sdk';
 
 import { AcpBackend } from '../AcpBackend';
 import { createAcpTestTransportHandler } from '../testkit/subprocessHarness';
+import { createTestAcpRuntime } from '@/testkit/backends/acpRuntime';
+import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBackend';
+import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHandler';
+import { createBasicSessionClientWithOverrides } from '@/testkit/backends/sessionFixtures';
+import { MessageBuffer } from '@/ui/ink/messageBuffer';
 
 /**
  * Repair coverage for QF-AC-003, second half.
@@ -85,4 +90,47 @@ describe('AcpBackend provider connection liveness', () => {
       'disposal is terminal and must never invite a reopen',
     ).toBe(false);
   });
+});
+
+describe('ACP runtime provider connection liveness forwarding', () => {
+  /**
+   * The runtime forwarder is gated on its own `sessionId`, so a backend flag that never
+   * reaches the prompt loop would make recovery dead code in production. This drives the real
+   * `AcpBackend.cancel()` fallback through the real runtime accessor.
+   */
+  it('surfaces a real backend force-close through the started runtime', async () => {
+    const backend = createBackend();
+    installPeer(backend, {
+      prompt: async () => ({ stopReason: 'end_turn' }),
+      cancel: () => new Promise<never>(() => {}),
+    });
+
+    const seam = createFakeAcpRuntimeBackend({ sessionId: 'test-session' });
+    (seam as unknown as { isProviderConnectionForceClosed: () => boolean })
+      .isProviderConnectionForceClosed = () => backend.isProviderConnectionForceClosed();
+
+    const runtime = createTestAcpRuntime({
+      provider: 'copilot',
+      directory: '/tmp',
+      session: createBasicSessionClientWithOverrides({}),
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => seam,
+    } as never);
+    await runtime.startOrLoad({});
+
+    expect(
+      runtime.isProviderConnectionForceClosed(),
+      'a healthy started session must not be reported as force-closed',
+    ).toBe(false);
+
+    await backend.cancel('test-session' as never);
+
+    expect(
+      runtime.isProviderConnectionForceClosed(),
+      'the real backend force-close must reach the runtime accessor the prompt loop reads',
+    ).toBe(true);
+  }, 20_000);
 });

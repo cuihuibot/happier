@@ -342,7 +342,9 @@ runtime projection, so the outcome contract is covered end to end rather than by
 a synthetic handler event. `AcpBackend.cancelForceClose.test.ts` drives the real
 `cancel()` settlement fallback against an unresponsive provider peer, and
 `runPermissionModePromptLoop.cancellationLivelock.test.ts` fails if the prompt
-loop starves the event loop while the abort signal is aborted.
+loop starves the event loop while the abort signal is aborted. The same file
+also drives a real backend force-close through the real runtime accessor that
+the prompt loop reads, so the recovery seam cannot silently become dead code.
 
 The live acceptance check must use a real Copilot-managed Happier session in
 autopilot mode:
