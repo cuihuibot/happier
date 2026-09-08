@@ -14,6 +14,7 @@ Last verified: September 8, 2026.
 | `ac0fe7965f` | Copilot completion | Preserves canonical `task_complete` identity, persists a task-complete summary when Copilot emits no ordinary assistant message, and keeps spawn routing compatible with legacy requests. |
 | `eb432e2af1` | fork operations | Defines the private-fork synchronization and push-safety workflow. |
 | `75850ea321` | completion durability and citations | Retries nondurable task-complete summaries with the original stream identity and displays opaque Copilot citation markers safely. |
+| _this branch_ | provider-autonomous continuation | Persists Copilot autopilot replies that the provider emits after `session/prompt` already resolved with `stopReason: end_turn`. |
 
 Review the exact maintained delta with:
 
@@ -62,6 +63,123 @@ The live acceptance check must use a real Copilot-managed Happier session:
 3. Send another turn and confirm the earlier summary still has exactly one
    assistant transcript row.
 4. Confirm `pendingCount` and `pendingBlockedCount` both return to zero.
+
+## Provider-autonomous continuation
+
+### Problem
+
+GitHub Copilot CLI 1.0.84-1 exposes an ACP `autopilot` session mode. In that
+mode the agent resolves `session/prompt` with `stopReason: end_turn` and then
+*keeps working*, emitting further prompt-turn `session/update` notifications for
+the same session. ACP protocol version 1 has no notification that starts or
+ends such a continuation and carries no turn identity on `session/update`.
+
+Happier closes the dispatched turn generation when the prompt RPC resolves, so
+the global dispatch guard rejected every later update with
+`Dropping prompt-turn session/update outside an active dispatched generation`.
+The provider's final answer was therefore permanently absent from the
+transcript. Captured on 2026-09-08: the prompt resolved at `10:47:57.674Z` and
+the `task_complete` summary arrived at `10:47:59.193Z`, 1.5 s after the turn had
+already been finalized.
+
+### Required behavior
+
+- A prompt-turn `session/update` that arrives after a *completed* turn outcome,
+  from an opted-in provider, for the matching session, must open a new
+  provider-owned turn generation and be persisted.
+- The continuation is projected as its own transcript turn. Stage-one
+  commentary from the client turn and a stage-two `task_complete` summary from
+  the continuation must each persist exactly once.
+- Plain assistant prose emitted during a continuation must persist, not only
+  `task_complete` summaries.
+- Busy/completion lifecycle must stay coherent: the session must not be
+  reported idle while a continuation is still producing output, and a queued or
+  newly arriving client prompt must not silently discard unflushed continuation
+  output.
+- Every existing protection is retained unchanged: the global
+  outside-active-generation guard, cancellation, closed or stale generations,
+  session-id mismatch, disposal, and `loadSession` replay.
+
+### Design constraints deliberately honored
+
+- **No arbitrary grace sleep as lifecycle proof.** The turn is not held open
+  after `end_turn` waiting to see whether a continuation arrives. The arrival of
+  a real prompt-turn notification is itself the signal to reopen. Nothing is
+  delayed on turns that have no continuation.
+- **The stall budget only closes, never gates.** `stallMs` (default 2000 ms)
+  closes a continuation segment whose output has *already* been projected. It
+  cannot drop or withhold output, and it is not evidence that the provider
+  finished. It mirrors the existing response-completion stall budget. A
+  terminal `task_complete` tool call closes the segment immediately, so the
+  common autopilot path never waits for it.
+- **Opt-in per provider.** Only the Copilot ACP backend passes
+  `providerAutonomousContinuation`. Every other ACP provider keeps byte-identical
+  behavior.
+- **Bounded.** `maxPerTurn` (default 8) caps reopenings per client turn, so a
+  misbehaving provider cannot keep a session open indefinitely.
+- **`usage_update` never reopens.** Reopening on any notification would resurrect
+  turns from bookkeeping traffic; only prompt-turn update types qualify.
+
+### Why the continuation is a separate turn
+
+`flushTurn()` projects the `task_complete` summary fallback only when the
+segment produced no ordinary assistant message. That rule from
+[Copilot completion persistence](#copilot-completion-persistence) is intentional
+and is preserved unchanged. Running the continuation as its own generation gives
+it a fresh empty accumulated response, so a stage-two summary that follows
+stage-one commentary is projected correctly *by construction* rather than by
+broadening the fallback rule and risking duplicate summaries on ordinary turns.
+
+### Main implementation
+
+- `apps/cli/src/agent/acp/AcpBackend.ts` — continuation arm/open/stall/close
+  lifecycle beside the existing dispatch filter.
+- `apps/cli/src/agent/acp/runtime/createAcpRuntime.ts` — projects a continuation
+  as its own transcript turn; adds `waitForAutonomousContinuationIdle()` and
+  `settleAutonomousContinuation()`.
+- `apps/cli/src/agent/runtime/runPermissionModePromptLoop.ts` — settles an open
+  continuation before a new client prompt calls `beginTurn()`.
+- `apps/cli/src/backends/copilot/acp/backend.ts` — the single opt-in point.
+
+### Regression coverage
+
+```bash
+cd apps/cli
+yarn vitest run \
+  src/agent/acp/__tests__/AcpBackend.autonomousContinuation.test.ts \
+  src/agent/acp/runtime/__tests__/createAcpRuntime.autonomousContinuation.test.ts
+yarn vitest run src/agent/acp src/backends/copilot src/agent/runtime
+yarn typecheck
+```
+
+The live acceptance check must use a real Copilot-managed Happier session in
+autopilot mode:
+
+1. Send a prompt that forces two stages: visible commentary first, then a final
+   `task_complete` summary carrying a unique marker.
+2. Confirm the persisted transcript contains the stage-one commentary and
+   exactly one assistant row containing the stage-two marker.
+3. Repeat with a prompt whose continuation ends in plain prose rather than
+   `task_complete`, and confirm the prose persists.
+4. Send a new prompt while a continuation is still running and confirm the
+   continuation output persists under its own turn and the new turn is answered.
+5. Cancel during a continuation and confirm the session stops and reports
+   truthfully.
+6. Confirm no duplicate assistant rows and that `pendingCount` and
+   `pendingBlockedCount` both return to zero.
+
+Comparing the native provider event log, the ACP wire trace, and the persisted
+transcript is required. A successful `session create` or an idle `send --wait`
+is not acceptance evidence on its own.
+
+### Compatibility and rollback
+
+The change is additive and provider-gated. To disable it without reverting
+code, remove `providerAutonomousContinuation` from
+`buildCopilotAcpBackendOptions`; the backend then restores the previous
+drop-after-`end_turn` behavior exactly. To roll back the deployed payload,
+repoint `~/.happier/cli/current` at the previous version directory and restart
+the daemon as described in [Deployment record](#deployment-record).
 
 ## Opaque citation display
 

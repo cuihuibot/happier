@@ -37,6 +37,11 @@ type PromptRuntime = {
   compactContext?: (command: string) => Promise<void>;
   failTurn?: (error: unknown) => void | boolean | Promise<void | boolean>;
   flushTurn: () => void | Promise<void>;
+  /**
+   * Settle a provider-owned autonomous continuation before the next client turn claims the
+   * runtime. Optional: only ACP providers that opt into autonomous continuation implement it.
+   */
+  settleAutonomousContinuation?: () => Promise<void>;
   reset: () => Promise<void>;
   getSessionId: () => string | null;
   shouldResumeAfterPermissionModeChange?: () => boolean;
@@ -465,6 +470,12 @@ export async function runPermissionModePromptLoop(opts: {
           startSeqExclusive,
         });
         readyTurnContext = { turnToken, startSeqExclusive };
+      }
+      // A provider may still be projecting an autonomous continuation. Settle it before the
+      // client turn resets runtime turn state, so its output is persisted under its own turn
+      // instead of being discarded or attributed to this prompt.
+      if (typeof opts.runtime.settleAutonomousContinuation === 'function') {
+        await opts.runtime.settleAutonomousContinuation();
       }
       opts.runtime.beginTurn();
       didBeginRuntimeTurn = true;

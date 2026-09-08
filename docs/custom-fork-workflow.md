@@ -42,6 +42,30 @@ git config --get remote.pushDefault
 `DISABLED` for pushes, and `custom/cuihui` must track
 `origin/custom/cuihui`.
 
+## Develop a fix on a topic branch
+
+Do not commit directly to `custom/cuihui`. Branch from the current integration
+tip, keep the change reviewable, and open a pull request into `custom/cuihui`
+without merging it yourself.
+
+```bash
+git fetch origin
+git switch -c fix/<short-description> origin/custom/cuihui
+# implement, then run the regression commands in cuihui-customizations.md
+git push -u origin fix/<short-description>
+gh pr create --repo cuihuibot/happier --base custom/cuihui --head fix/<short-description>
+```
+
+Verify the acting GitHub identity before any remote write:
+
+```bash
+gh api user --jq .login   # must print: cuihuibot
+```
+
+Record the maintained behavior in
+[Cuihui Happier customizations](cuihui-customizations.md) in the same branch,
+including its regression commands, live acceptance steps, and rollback path.
+
 ## Sync changes from upstream
 
 Use merges rather than rebases so the customization history remains stable and
