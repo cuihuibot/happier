@@ -168,7 +168,9 @@ describe('AcpBackend provider-autonomous continuation', () => {
     expect(statusesAfterCompletion().at(-1)).toBe('running');
     expect(statusesAfterCompletion().filter((s) => s === 'idle')).toHaveLength(idleCountBefore);
 
-    await vi.advanceTimersByTimeAsync(200);
+    // The announced `task_complete` tool call is still unresolved, so the stall budget is
+    // extended a bounded number of times before the safety stop fires.
+    await vi.advanceTimersByTimeAsync(50 * 25);
 
     const ended = continuationEvents(emitted).filter((e) => (e.payload as any)?.phase === 'ended');
     expect(ended).toHaveLength(1);
@@ -262,7 +264,7 @@ describe('AcpBackend provider-autonomous continuation', () => {
         sessionId: SESSION_ID,
         update: { ...taskCompleteToolCall, toolCallId: `call_${attempt}` },
       });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(50 * 25);
     }
 
     const started = continuationEvents(emitted).filter((e) => (e.payload as any)?.phase === 'started');

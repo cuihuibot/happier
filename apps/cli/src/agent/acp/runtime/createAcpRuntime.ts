@@ -1342,10 +1342,53 @@ export function createAcpRuntime(params: {
     publishProviderSessionInfo(pending.update, pending.observedAt);
   };
 
-  /** Flush the runtime turn that is currently projecting a provider-autonomous continuation. */
-  const flushAutonomousContinuationTurn = async (): Promise<void> => {
+  /**
+   * Translate how the backend closed a continuation segment into the runtime turn outcome.
+   *
+   * Only the provider's own correlated `task_complete` is a successful completion. An
+   * inactivity safety timeout, a cancellation, a superseding client prompt, a backend failure
+   * and a disposal are all interruptions: they must be projected through the existing
+   * non-completed outcome path so the transcript records an explicitly incomplete turn instead
+   * of fabricating `task_complete`. Returning `null` means "successful completion".
+   */
+  const resolveAutonomousContinuationTurnOutcome = (
+    payload: Record<string, unknown> | null,
+  ): AcpTurnOutcome | null => {
+    const outcome = typeof payload?.outcome === 'string' ? payload.outcome : null;
+    const reason = typeof payload?.reason === 'string' ? payload.reason : 'unknown';
+    switch (outcome) {
+      case 'completed':
+        return null;
+      case 'cancelled':
+        return { kind: 'aborted', stopReason: 'cancelled' };
+      case 'failed':
+        return { kind: 'failed', error: new Error(`autonomous continuation ended: ${reason}`) };
+      case 'timed_out': {
+        const capMs = typeof payload?.stallMs === 'number' ? payload.stallMs : 0;
+        return { kind: 'timed_out', capMs };
+      }
+      default:
+        // An unknown or missing outcome must never be assumed successful.
+        return { kind: 'failed', error: new Error(`autonomous continuation ended: ${reason}`) };
+    }
+  };
+
+  /**
+   * Flush the runtime turn that is currently projecting a provider-autonomous continuation.
+   *
+   * `outcome` is recorded before the flush so the existing turn-boundary logic publishes the
+   * incomplete markers and skips `task_complete` and `recordSessionTurnCompleted`. Text that
+   * the provider already produced is still persisted by the interrupted transcript flush.
+   */
+  const flushAutonomousContinuationTurn = async (outcome: AcpTurnOutcome | null): Promise<void> => {
     const runtime = runtimeRef;
     if (!runtime) return;
+    if (outcome) {
+      logger.debug(
+        `[${params.provider}] Projecting provider-autonomous continuation as an incomplete turn (${outcome.kind})`,
+      );
+      rememberTurnOutcome(outcome);
+    }
     await runtime.flushTurn();
   };
 
@@ -1377,10 +1420,11 @@ export function createAcpRuntime(params: {
     if (phase === 'ended') {
       if (!autonomousContinuationInFlight) return true;
       autonomousContinuationInFlight = false;
+      const outcome = resolveAutonomousContinuationTurnOutcome(payload);
       // Serialize continuation flushes so overlapping provider segments cannot interleave
       // transcript writes with each other.
       autonomousContinuationTail = autonomousContinuationTail
-        .then(flushAutonomousContinuationTurn)
+        .then(() => flushAutonomousContinuationTurn(outcome))
         .catch((error) => {
           logger.debug(`[${params.provider}] Failed to flush autonomous continuation turn`, error);
         });
@@ -2798,8 +2842,10 @@ export function createAcpRuntime(params: {
     async settleAutonomousContinuation(): Promise<void> {
       if (autonomousContinuationInFlight) {
         autonomousContinuationInFlight = false;
+        // A new client prompt interrupts the provider's autonomous run. The interrupted
+        // segment must not be reported as a successful completion.
         autonomousContinuationTail = autonomousContinuationTail
-          .then(flushAutonomousContinuationTurn)
+          .then(() => flushAutonomousContinuationTurn({ kind: 'aborted', stopReason: 'cancelled' }))
           .catch((error) => {
             logger.debug(`[${params.provider}] Failed to flush autonomous continuation turn`, error);
           });

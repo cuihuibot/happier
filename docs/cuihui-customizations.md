@@ -96,6 +96,12 @@ already been finalized.
   reported idle while a continuation is still producing output, and a queued or
   newly arriving client prompt must not silently discard unflushed continuation
   output.
+- **A completion may only be reported when the provider actually completed.**
+  Only the provider's own correlated terminal `task_complete` produces a
+  successful turn. An inactivity safety stop, a user cancellation, a superseding
+  client prompt, a backend failure and a disposal are interruptions and must be
+  projected as explicitly incomplete turns that still keep the text the provider
+  already produced.
 - Every existing protection is retained unchanged: the global
   outside-active-generation guard, cancellation, closed or stale generations,
   session-id mismatch, disposal, and `loadSession` replay.
@@ -111,13 +117,33 @@ already been finalized.
   later status-only `tool_call_update`, so the terminal detector correlates the
   completion by `toolCallId`. Every observed autopilot run closes on that
   signal rather than on a timer.
-- **The stall budget only closes, never gates.** `stallMs` (default 30 s) is a
-  safety cap for a provider that never reports `task_complete`. It closes a
-  segment whose output has *already* been projected, so it cannot drop or
-  withhold output, and it is not evidence that the provider finished. It is
-  deliberately far longer than an ordinary pause between reasoning and prose: a
-  short budget ends the run mid-work and pushes the remaining output across a
-  segment boundary, which is exactly how output was lost in live testing.
+- **The stall budget only closes, never gates, and never claims success.**
+  `stallMs` (default 30 s) is a safety cap for a provider that never reports
+  `task_complete`. It closes a segment whose output has *already* been
+  projected, so it cannot drop or withhold output, and it is **not** evidence
+  that the provider finished. It is deliberately far longer than an ordinary
+  pause between reasoning and prose: a short budget ends the run mid-work and
+  pushes the remaining output across a segment boundary, which is exactly how
+  output was lost in live testing.
+
+  An earlier revision of this change did treat the stall stop as a completion.
+  See *Corrected defect: the stall stop was reported as success* below.
+- **A running tool call is work, not silence.** If one of the continuation's own
+  tool calls is still unresolved when the stall budget elapses, the budget is
+  extended instead of ending the segment, so a slow tool is never misreported as
+  a stall. The extension is bounded
+  (`MAX_AUTONOMOUS_CONTINUATION_ACTIVE_TOOL_EXTENSIONS`, 20 budgets) so a tool
+  call that never resolves cannot hold the session busy forever; when the bound
+  is reached the segment ends with the `timed_out` outcome, not a completion.
+- **Late output reopens rather than disappears.** A segment that ended on the
+  safety stop stays marked incomplete, and the turn remains armed, so provider
+  output that arrives afterwards opens a new honestly-labelled segment instead
+  of being dropped.
+- **Disposal is reported before the backend goes silent.** `dispose()` closes
+  an open continuation *before* setting the disposed flag that silences event
+  emission, so the runtime learns the segment ended, flushes the text already
+  produced, and marks the turn incomplete rather than leaving it silently
+  unresolved.
 - **Client-turn idle budgets must not close a continuation.** The existing
   post-prompt idle timers exist to bound a *client* prompt turn whose completion
   was already published before the continuation opened. `finalizeIdleStatus()`
@@ -153,16 +179,63 @@ broadening the fallback rule and risking duplicate summaries on ordinary turns.
   continuation before a new client prompt calls `beginTurn()`.
 - `apps/cli/src/backends/copilot/acp/backend.ts` — the single opt-in point.
 
+### Backend-to-runtime end contract
+
+`AcpBackend` emits `event/autonomous_continuation` with `phase: 'started'` and
+`phase: 'ended'`. The ended payload carries:
+
+| field | meaning |
+| --- | --- |
+| `continuationId` | identity of the segment being closed |
+| `reason` | human-readable cause, for diagnostics only |
+| `outcome` | `completed` \| `timed_out` \| `cancelled` \| `failed` |
+| `stallMs` | the safety budget in force, reported as the timeout cap |
+
+`outcome` is the only field the runtime acts on, and the mapping is total:
+
+| `outcome` | runtime turn outcome | transcript result |
+| --- | --- | --- |
+| `completed` | successful completion | `task_complete`, turn recorded completed |
+| `timed_out` | `{ kind: 'timed_out' }` | `turn_aborted`, turn cancelled |
+| `cancelled` | `{ kind: 'aborted' }` | `turn_cancelled`, turn cancelled |
+| `failed` | `{ kind: 'failed' }` | `turn_aborted`, turn cancelled |
+| missing/unknown | `{ kind: 'failed' }` | `turn_aborted`, turn cancelled |
+
+A missing or unrecognized outcome is deliberately treated as a failure, never as
+a success, so a future backend change cannot silently reintroduce a fabricated
+completion.
+
+### Corrected defect: the stall stop was reported as success
+
+The first revision of this change (`3abcd08653`) closed a stalled continuation
+by emitting `phase: 'ended'` with a `reason` string only. The runtime discarded
+the reason and always flushed the turn through the successful path, so
+`flushTurn()` published `task_complete` and called
+`recordSessionTurnCompleted()`. After any provider or tool interval longer than
+the stall budget, Happier told the user that the autonomous work had finished
+while the provider might still be working and might later resume behind that
+false completion boundary.
+
+This was found by independent product-quality review (defect QF-AC-001) and is
+fixed by the `outcome` contract above. The stall budget now only ever produces
+an explicitly incomplete turn.
+
 ### Regression coverage
 
 ```bash
 cd apps/cli
 yarn vitest run \
   src/agent/acp/__tests__/AcpBackend.autonomousContinuation.test.ts \
-  src/agent/acp/runtime/__tests__/createAcpRuntime.autonomousContinuation.test.ts
+  src/agent/acp/runtime/__tests__/createAcpRuntime.autonomousContinuation.test.ts \
+  src/agent/acp/runtime/__tests__/createAcpRuntime.continuationOutcome.test.ts
 yarn vitest run src/agent/acp src/backends/copilot src/agent/runtime
 yarn typecheck
 ```
+
+`createAcpRuntime.continuationOutcome.test.ts` drives the *real* `AcpBackend`
+stall timer, terminal correlation, cancellation and disposal paths into the real
+runtime projection, so the outcome contract is covered end to end rather than by
+a synthetic handler event.
 
 The live acceptance check must use a real Copilot-managed Happier session in
 autopilot mode:
@@ -184,8 +257,16 @@ autopilot mode:
    distinct provider turns with distinct segment identities, not duplicate rows
    for one turn.
 7. Confirm the session debug log records `Closed provider-autonomous
-   continuation ... (task_complete)` rather than `(inactivity)`, and records no
+   continuation ... (task_complete, outcome=completed)` rather than
+   `(inactivity, outcome=timed_out)`, and records no
    `Dropping prompt-turn session/update` lines. Enable `DEBUG=1` for this check.
+8. Force the safety stop by lowering
+   `HAPPIER_ACP_AUTONOMOUS_CONTINUATION_STALL_MS` and confirm the stalled turn
+   is reported as **incomplete**: no `task_complete` row, an aborted turn
+   marker, and the text the provider already produced still persisted. A
+   `task_complete` row here is defect QF-AC-001 reappearing.
+9. Run a continuation whose tool call takes longer than the stall budget and
+   confirm it is not reported as stalled or completed while the tool runs.
 
 Tuning overrides for diagnostics only:
 `HAPPIER_ACP_MAX_AUTONOMOUS_CONTINUATIONS`,
@@ -194,6 +275,25 @@ Tuning overrides for diagnostics only:
 Comparing the native provider event log, the ACP wire trace, and the persisted
 transcript is required. A successful `session create` or an idle `send --wait`
 is not acceptance evidence on its own.
+
+### Known limits
+
+- Coherent busy/completion reporting is enforced for the outcomes enumerated in
+  the end contract. It is not a general guarantee that Happier can never report
+  a finished turn while a provider is still working: ACP v1 gives no
+  continuation lifecycle to observe, so a provider that stops emitting entirely
+  and resumes much later still ends its segment on the safety stop. That case is
+  now reported as incomplete rather than complete, and late output opens a new
+  segment.
+- Once `maxPerTurn` continuation segments have been used for one client turn,
+  further provider output for that turn is dropped by the dispatch guard. This
+  is logged (`continuation budget exhausted`) but is not surfaced in the
+  transcript.
+- The default `maxPerTurn` of 8 is a judgement call; Copilot's own observed
+  proxy limit was `--max-autopilot-continues=2`.
+- The reproduction proves the isolated continuation-loss defect only. It does
+  not establish that every historically reported missing-prose or fast-turn
+  symptom shares this cause.
 
 ### Compatibility and rollback
 
