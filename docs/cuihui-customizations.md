@@ -153,20 +153,30 @@ already been finalized.
 - **Opt-in per provider.** Only the Copilot ACP backend passes
   `providerAutonomousContinuation`. Every other ACP provider keeps byte-identical
   behavior.
-- **Bounded.** `maxPerTurn` (default 8) caps reopenings per client turn, so a
-  misbehaving provider cannot keep a session open indefinitely.
+- **Bounded work, not bounded visibility.** `maxPerTurn` (default 8) caps how
+  many autonomous segments Happier will *work through* for one client turn, so a
+  misbehaving provider cannot keep a session open indefinitely. It does not
+  decide whether the user may see output the provider already produced. Once the
+  budget is spent the turn stays armed for exactly one **terminal limit
+  segment**: the next qualifying prompt-turn update opens it, its content is
+  written to the transcript, and it closes in the same update batch with
+  `outcome: 'limit_exceeded'` — no stall timer, no further work accepted. The
+  client turn is then latched, so later chunks are dropped quietly instead of
+  producing an error for every chunk. If the provider genuinely finishes inside
+  the limit segment, the terminal `task_complete` check runs first and the
+  segment truthfully reports `completed`.
 - **`usage_update` never reopens.** Reopening on any notification would resurrect
   turns from bookkeeping traffic; only prompt-turn update types qualify.
 
 ### Why the continuation is a separate turn
 
-`flushTurn()` projects the `task_complete` summary fallback only when the
-segment produced no ordinary assistant message. That rule from
-[Copilot completion persistence](#copilot-completion-persistence) is intentional
-and is preserved unchanged. Running the continuation as its own generation gives
-it a fresh empty accumulated response, so a stage-two summary that follows
-stage-one commentary is projected correctly *by construction* rather than by
-broadening the fallback rule and risking duplicate summaries on ordinary turns.
+Running the continuation as its own generation gives it a fresh accumulated
+response and its own transcript turn, so an autonomous segment is attributable
+and independently cancellable rather than being appended to a turn the client
+already considers finished.
+
+This separation alone was **not** sufficient for the final summary. See
+[Corrected defect: a final summary after commentary was lost](#corrected-defect-a-final-summary-after-commentary-was-lost).
 
 ### Main implementation
 
@@ -188,7 +198,7 @@ broadening the fallback rule and risking duplicate summaries on ordinary turns.
 | --- | --- |
 | `continuationId` | identity of the segment being closed |
 | `reason` | human-readable cause, for diagnostics only |
-| `outcome` | `completed` \| `timed_out` \| `cancelled` \| `failed` |
+| `outcome` | `completed` \| `timed_out` \| `limit_exceeded` \| `cancelled` \| `failed` |
 | `stallMs` | the safety budget in force, reported as the timeout cap |
 
 `outcome` is the only field the runtime acts on, and the mapping is total:
@@ -197,6 +207,7 @@ broadening the fallback rule and risking duplicate summaries on ordinary turns.
 | --- | --- | --- |
 | `completed` | successful completion | `task_complete`, turn recorded completed |
 | `timed_out` | `{ kind: 'timed_out' }` | `turn_aborted`, turn cancelled |
+| `limit_exceeded` | `{ kind: 'failed' }` | `turn_aborted`, turn cancelled; the segment's text is still persisted |
 | `cancelled` | `{ kind: 'aborted' }` | `turn_cancelled`, turn cancelled |
 | `failed` | `{ kind: 'failed' }` | `turn_aborted`, turn cancelled |
 | missing/unknown | `{ kind: 'failed' }` | `turn_aborted`, turn cancelled |
@@ -220,6 +231,44 @@ This was found by independent product-quality review (defect QF-AC-001) and is
 fixed by the `outcome` contract above. The stall budget now only ever produces
 an explicitly incomplete turn.
 
+### Corrected defect: budget exhaustion silently dropped provider output
+
+The second revision (`8a04c52afa`) returned `false` from
+`maybeBeginAutonomousContinuation()` as soon as the per-turn budget was spent and
+wrote a debug log. The runtime therefore received neither the content nor any
+incomplete indicator, so a truncated autonomous run was indistinguishable from a
+coherent finished one. Documenting that as a known limit was not an acceptable
+resolution.
+
+This was found by independent product-quality review (defect QF-AC-002) and is
+fixed by the terminal limit segment described above: the first output past the
+budget is persisted and the turn is explicitly reported incomplete, exactly once.
+
+### Corrected defect: a final summary after commentary was lost
+
+`flushTurn()` used to project the `task_complete` summary **only** when the
+segment had produced no ordinary assistant message. When a provider narrated
+first and then finished the *same* turn with a canonical `task_complete`, the
+stream segment was already claimed by the commentary, the fallback never ran,
+and the final answer never reached the transcript — observed live on the v3
+candidate (Happier session `cmtspnf8l0f7xnpp84ylz6c51`: one assistant row
+containing the commentary marker, the `task_complete` summary present in the
+lifecycle, and zero assistant rows containing the summary marker).
+
+A successful final summary is now published as its **own** durable assistant
+row after the stream flush, so it never overwrites or truncates the commentary
+segment. The rules are:
+
+- Only for a turn that completed successfully — a cancelled, aborted,
+  `timed_out`, `failed` or `limit_exceeded` turn never gains an answer row.
+- Never when the `task_complete` tool result itself reported failure.
+- Never when the summary text is already visible in the turn's prose.
+- Exactly once per provider tool-call id. The row `localId` is derived
+  deterministically from that call id, so a direct retry that replays the same
+  call reuses the same row identity instead of appending a second copy, while a
+  later turn carries a new call id and gets its own row.
+- The pre-existing empty-response fallback is unchanged.
+
 ### Regression coverage
 
 ```bash
@@ -227,7 +276,9 @@ cd apps/cli
 yarn vitest run \
   src/agent/acp/__tests__/AcpBackend.autonomousContinuation.test.ts \
   src/agent/acp/runtime/__tests__/createAcpRuntime.autonomousContinuation.test.ts \
-  src/agent/acp/runtime/__tests__/createAcpRuntime.continuationOutcome.test.ts
+  src/agent/acp/runtime/__tests__/createAcpRuntime.continuationOutcome.test.ts \
+  src/agent/acp/runtime/__tests__/createAcpRuntime.continuationCap.test.ts \
+  src/agent/acp/runtime/__tests__/createAcpRuntime.sameTurnSummary.test.ts
 yarn vitest run src/agent/acp src/backends/copilot src/agent/runtime
 yarn typecheck
 ```
@@ -267,6 +318,18 @@ autopilot mode:
    `task_complete` row here is defect QF-AC-001 reappearing.
 9. Run a continuation whose tool call takes longer than the stall budget and
    confirm it is not reported as stalled or completed while the tool runs.
+10. Force budget exhaustion by setting
+    `HAPPIER_ACP_MAX_AUTONOMOUS_CONTINUATIONS=1` and confirm the output produced
+    past the budget still appears in the transcript and the turn is reported
+    **incomplete** with `outcome=limit_exceeded` exactly once. A silently
+    missing row here is defect QF-AC-002 reappearing.
+11. Run a single ordinary turn whose provider narrates and then finishes with a
+    canonical `task_complete`, and confirm the transcript holds both the
+    commentary row and exactly one row containing the summary. A missing summary
+    row here is defect PA-AC-003 reappearing.
+12. Run the same portfolio in ordinary `#agent` mode. The continuation option is
+    passed for every Copilot session, so ordinary-mode behavior must be observed
+    live, not assumed inert from the opt-in flag.
 
 Tuning overrides for diagnostics only:
 `HAPPIER_ACP_MAX_AUTONOMOUS_CONTINUATIONS`,
@@ -286,9 +349,11 @@ is not acceptance evidence on its own.
   now reported as incomplete rather than complete, and late output opens a new
   segment.
 - Once `maxPerTurn` continuation segments have been used for one client turn,
-  further provider output for that turn is dropped by the dispatch guard. This
-  is logged (`continuation budget exhausted`) but is not surfaced in the
-  transcript.
+  Happier accepts exactly one more terminal limit segment: that batch's output is
+  persisted and the turn is reported incomplete with `limit_exceeded`. Provider
+  output arriving *after* that terminal segment is dropped without a transcript
+  row. This is a deliberate bound on unbounded autonomous work, and it is
+  visible to the user as an incomplete turn rather than as a silent success.
 - The default `maxPerTurn` of 8 is a judgement call; Copilot's own observed
   proxy limit was `--max-autopilot-continues=2`.
 - The reproduction proves the isolated continuation-loss defect only. It does

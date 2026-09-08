@@ -781,6 +781,7 @@ export type AcpProviderAutonomousContinuationOptions = Readonly<{
 export type AcpAutonomousContinuationEndOutcome =
   | 'completed'
   | 'timed_out'
+  | 'limit_exceeded'
   | 'cancelled'
   | 'failed';
 
@@ -936,6 +937,19 @@ export class AcpBackend implements AgentBackend {
   private autonomousContinuationGeneration: number | null = null;
   /** Consecutive stall budgets already extended because a continuation tool call was running. */
   private autonomousContinuationActiveToolExtensions = 0;
+  /**
+   * Continuation-budget exhaustion state.
+   *
+   * When the per-turn budget is spent, provider output must not simply vanish. The next
+   * qualifying prompt-turn update opens exactly one *terminal limit segment*: it carries that
+   * output into the transcript and closes immediately with `limit_exceeded`, so the run is
+   * truncated visibly instead of silently. `limitLatchedGeneration` then records that the
+   * limit has already been surfaced for that client turn, so later chunks are dropped quietly
+   * rather than emitting a segment (or an error) for every remaining notification.
+   */
+  private autonomousContinuationLimitSegmentPending = false;
+  private autonomousContinuationLimitSegmentActive = false;
+  private autonomousContinuationLimitLatchedGeneration: number | null = null;
   private autonomousContinuationStallTimeout: NodeJS.Timeout | null = null;
 
   /** Transport handler for agent-specific behavior */
@@ -2447,6 +2461,10 @@ export class AcpBackend implements AgentBackend {
     // inactivity budget.
     if (this.isAutonomousContinuationActive() && this.observeAutonomousContinuationTerminalSignal(normalizedUpdates)) {
       this.endAutonomousContinuation('task_complete', 'completed');
+    } else if (this.isAutonomousContinuationActive() && this.autonomousContinuationLimitSegmentActive) {
+      // The terminal limit segment exists only to carry this batch into the transcript and
+      // report the truncation. It never waits on a stall budget for more work.
+      this.endAutonomousContinuation('continuation budget exhausted', 'limit_exceeded');
     }
   }
 
@@ -2849,6 +2867,8 @@ export class AcpBackend implements AgentBackend {
    */
   private armAutonomousContinuation(outcome: AcpTurnOutcome): void {
     const limits = this.resolveAutonomousContinuationLimits();
+    this.autonomousContinuationLimitSegmentPending = false;
+    this.autonomousContinuationLimitLatchedGeneration = null;
     if (!limits || this.disposed || this.replayCapture || outcome.kind !== 'completed') {
       this.autonomousContinuationArmedGeneration = null;
       this.autonomousContinuationRemaining = 0;
@@ -2867,6 +2887,8 @@ export class AcpBackend implements AgentBackend {
     }
     this.autonomousContinuationArmedGeneration = null;
     this.autonomousContinuationRemaining = 0;
+    this.autonomousContinuationLimitSegmentPending = false;
+    this.autonomousContinuationLimitLatchedGeneration = null;
   }
 
   private isAutonomousContinuationActive(): boolean {
@@ -2898,7 +2920,6 @@ export class AcpBackend implements AgentBackend {
     // A client prompt owns the session while it is pending or still settling.
     if (this.waitingForResponse || this.activePromptRpc) return false;
     if (this.autonomousContinuationArmedGeneration !== this.turnGeneration) return false;
-    if (this.autonomousContinuationRemaining <= 0) return false;
     if (notificationSessionId !== null && notificationSessionId !== this.acpSessionId) return false;
 
     const hasPromptTurnUpdate = updateCandidates.some((update) => {
@@ -2907,6 +2928,12 @@ export class AcpBackend implements AgentBackend {
       return isPromptTurnSessionUpdateType(sessionUpdateType);
     });
     if (!hasPromptTurnUpdate) return false;
+
+    // The budget bounds how much autonomous work is accepted, not whether the user gets to
+    // see what the provider already said. Once it is spent, exactly one terminal limit
+    // segment still carries the output and reports the truncation.
+    const isLimitSegment = this.autonomousContinuationRemaining <= 0;
+    if (isLimitSegment && !this.autonomousContinuationLimitSegmentPending) return false;
 
     const continuationId = randomUUID();
     const previousGeneration = this.turnGeneration;
@@ -2918,14 +2945,20 @@ export class AcpBackend implements AgentBackend {
     this.autonomousContinuationId = continuationId;
     this.autonomousContinuationTaskCompleteCallIds.clear();
     this.autonomousContinuationArmedGeneration = null;
-    this.autonomousContinuationRemaining -= 1;
+    this.autonomousContinuationLimitSegmentActive = isLimitSegment;
+    if (isLimitSegment) {
+      this.autonomousContinuationLimitSegmentPending = false;
+    } else {
+      this.autonomousContinuationRemaining -= 1;
+    }
     this.pendingTurnOutcome = null;
     this.lastTurnOutcome = null;
     this.permissionFlushTurnGeneration = null;
     this.toolCallCountSincePrompt = 0;
 
     logger.debug(
-      `[AcpBackend] Opening provider-autonomous continuation ${continuationId} after completed generation ${previousGeneration}`,
+      `[AcpBackend] Opening provider-autonomous continuation ${continuationId} after completed generation `
+      + `${previousGeneration}${isLimitSegment ? ' (terminal limit segment: budget exhausted)' : ''}`,
     );
     this.emit({ type: 'status', status: 'running' });
     this.emit({
@@ -3016,9 +3049,11 @@ export class AcpBackend implements AgentBackend {
       clearTimeout(this.autonomousContinuationStallTimeout);
       this.autonomousContinuationStallTimeout = null;
     }
+    const wasLimitSegment = this.autonomousContinuationLimitSegmentActive;
     this.autonomousContinuationGeneration = null;
     this.autonomousContinuationId = null;
     this.autonomousContinuationActiveToolExtensions = 0;
+    this.autonomousContinuationLimitSegmentActive = false;
     this.autonomousContinuationTaskCompleteCallIds.clear();
 
     if (generation === this.turnGeneration) {
@@ -3029,13 +3064,19 @@ export class AcpBackend implements AgentBackend {
       // also applies after a safety timeout: late provider output must open a new, honestly
       // labelled segment rather than be dropped, and the stalled segment stays marked
       // incomplete.
-      if (this.autonomousContinuationRemaining > 0 && !this.disposed) {
+      if (wasLimitSegment) {
+        // The truncation has now been reported once for this client turn. Staying latched is
+        // what keeps the bound real and stops an error being emitted for every later chunk.
+        this.autonomousContinuationLimitLatchedGeneration = generation;
+        this.autonomousContinuationLimitSegmentPending = false;
+      } else if (this.autonomousContinuationRemaining > 0 && !this.disposed) {
         this.autonomousContinuationArmedGeneration = generation;
-      } else if (!this.disposed) {
-        logger.debug(
-          '[AcpBackend] Provider-autonomous continuation budget exhausted; further provider output '
-          + 'for this turn will be dropped by the dispatch guard',
-        );
+      } else if (!this.disposed && this.autonomousContinuationLimitLatchedGeneration !== generation) {
+        // The budget is spent. Keep the turn armed for exactly one terminal limit segment so
+        // any further provider output is still carried into the transcript and the truncation
+        // is reported, instead of disappearing behind a debug log.
+        this.autonomousContinuationArmedGeneration = generation;
+        this.autonomousContinuationLimitSegmentPending = true;
       }
     }
 

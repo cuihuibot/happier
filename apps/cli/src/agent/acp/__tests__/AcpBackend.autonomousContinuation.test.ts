@@ -268,7 +268,16 @@ describe('AcpBackend provider-autonomous continuation', () => {
     }
 
     const started = continuationEvents(emitted).filter((e) => (e.payload as any)?.phase === 'started');
-    expect(started).toHaveLength(2);
+    const outcomes = continuationEvents(emitted)
+      .filter((e) => (e.payload as any)?.phase === 'ended')
+      .map((e) => (e.payload as any)?.outcome);
+    // The budget bounds autonomous *work*, not the user's access to output the provider already
+    // produced: two budgeted segments plus exactly one terminal limit segment that reports the
+    // truncation instead of dropping the batch behind a debug log.
+    expect(started).toHaveLength(3);
+    // Each segment here is closed by the stall budget, so the honest outcomes are two
+    // `timed_out` work segments followed by the single terminal limit segment.
+    expect(outcomes).toEqual(['timed_out', 'timed_out', 'limit_exceeded']);
   });
 
   it('drops a late continuation once the next client prompt owns the session', async () => {
