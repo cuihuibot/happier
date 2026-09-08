@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { logger } from '@/ui/logger';
 import type { AgentBackend, AgentMessage, McpServerConfig } from '@/agent';
@@ -96,6 +96,38 @@ const ACP_FAILURE_TRACE_ENV = 'HAPPIER_ACP_FAILURE_TRACE';
 type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
 type RuntimeSessionMediaSource = RuntimeSessionMediaMessage['media'][number];
 type RuntimeSessionMediaPersistResult = SessionMediaPersistResult;
+
+/**
+ * Stable transcript identity for a projected `task_complete` summary row.
+ *
+ * Derived from the provider tool-call id alone: a genuine retry replays the same call id and
+ * must reuse the same row identity, while a later turn carries a new call id and gets its own
+ * row. Nothing is derived from wall-clock time or row ordering.
+ */
+function taskCompleteSummaryLocalId(callId: string): string {
+  const digest = createHash('sha256')
+    .update(`acp-task-complete-summary\u0000${callId}`)
+    .digest('hex');
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    `5${digest.slice(13, 16)}`,
+    ((Number.parseInt(digest.slice(16, 17), 16) & 0x3) | 0x8).toString(16) + digest.slice(17, 20),
+    digest.slice(20, 32),
+  ].join('-');
+}
+
+/** True when a tool result reports failure, so its summary is not a successful answer. */
+function isFailedToolResult(result: unknown): boolean {
+  const record = asRecord(result);
+  if (!record) return false;
+  for (const key of ['is_error', 'isError', 'error', 'failed']) {
+    const value = record[key];
+    if (value === true) return true;
+    if (typeof value === 'string' && value.trim().length > 0) return true;
+  }
+  return false;
+}
 
 function readTaskCompleteSummary(msg: Extract<AgentMessage, { type: 'tool-call' }>): string | null {
   const args = asRecord(msg.args);
@@ -610,6 +642,12 @@ export function createAcpRuntime(params: {
   let isResponseInProgress = false;
   let taskStartedSent = false;
   let taskCompleteSummaryFallback: string | null = null;
+  let taskCompleteSummaryCallId: string | null = null;
+  /**
+   * `task_complete` summaries already published as their own transcript row, keyed by the
+   * durable row identity. Guarantees exactly-once projection across segments and retries.
+   */
+  const publishedTaskCompleteSummaryLocalIds = new Set<string>();
   let turnAborted = false;
   let pendingTurnOutcome: AcpTurnOutcome | null = null;
   let loadingSession = false;
@@ -883,6 +921,7 @@ export function createAcpRuntime(params: {
     isResponseInProgress = false;
     taskStartedSent = false;
     taskCompleteSummaryFallback = null;
+    taskCompleteSummaryCallId = null;
     turnAborted = false;
     pendingTurnOutcome = null;
     currentTurnId = null;
@@ -1367,6 +1406,17 @@ export function createAcpRuntime(params: {
         const capMs = typeof payload?.stallMs === 'number' ? payload.stallMs : 0;
         return { kind: 'timed_out', capMs };
       }
+      case 'limit_exceeded':
+        // The configured continuation budget truncated the autonomous run. The segment still
+        // carries whatever the provider produced; the turn is reported incomplete so the user
+        // can see that the run was cut short rather than silently losing the tail.
+        return {
+          kind: 'failed',
+          error: new Error(
+            'autonomous continuation stopped: the provider continued past the configured '
+            + 'continuation limit for this turn, so the run was truncated',
+          ),
+        };
       default:
         // An unknown or missing outcome must never be assumed successful.
         return { kind: 'failed', error: new Error(`autonomous continuation ended: ${reason}`) };
@@ -1596,7 +1646,13 @@ export function createAcpRuntime(params: {
             break;
           }
 
-          taskCompleteSummaryFallback = readTaskCompleteSummary(msg) ?? taskCompleteSummaryFallback;
+          {
+            const summary = readTaskCompleteSummary(msg);
+            if (summary !== null) {
+              taskCompleteSummaryFallback = summary;
+              taskCompleteSummaryCallId = msg.callId;
+            }
+          }
 
           accumulatedAssistantSegmentResponse = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
@@ -1625,6 +1681,11 @@ export function createAcpRuntime(params: {
               ? msg.result
               : JSON.stringify(msg.result ?? '').slice(0, 200);
             params.messageBuffer.addMessage(`Result: ${outputText}`, 'result');
+          }
+          if (taskCompleteSummaryCallId !== null && callId === taskCompleteSummaryCallId && isFailedToolResult(msg.result)) {
+            // A failed or refused `task_complete` is not a successful answer.
+            taskCompleteSummaryFallback = null;
+            taskCompleteSummaryCallId = null;
           }
           forwardToolResultWithMedia(msg, (next) => forwarder.forward(next));
 
@@ -2734,6 +2795,29 @@ export function createAcpRuntime(params: {
           { type: 'message', message: taskCompleteSummaryForDurableFallback },
           { localId: assistantRootSegment?.localId ?? randomUUID() },
         );
+      }
+      // A provider that narrates first and then finishes with `task_complete` used to lose its
+      // final summary: the stream segment was already claimed by the commentary, so the
+      // existing empty-response fallback above never ran. Publish the summary as its own
+      // durable row instead of appending to (or overwriting) the commentary segment.
+      if (
+        !turnAborted
+        && (!pendingTurnOutcome || pendingTurnOutcome.kind === 'completed')
+        && !taskCompleteSummaryForDurableFallback
+        && taskCompleteSummaryFallback
+        && taskCompleteSummaryCallId
+      ) {
+        const summary = taskCompleteSummaryFallback;
+        const alreadyVisible = accumulatedResponse.includes(summary.trim());
+        const localId = taskCompleteSummaryLocalId(taskCompleteSummaryCallId);
+        if (!alreadyVisible && !publishedTaskCompleteSummaryLocalIds.has(localId)) {
+          publishedTaskCompleteSummaryLocalIds.add(localId);
+          await params.session.sendAgentMessageCommitted(
+            params.provider,
+            { type: 'message', message: summary },
+            { localId },
+          );
+        }
       }
       await abortPendingAcpPermissionRequests(
         params.permissionHandler,

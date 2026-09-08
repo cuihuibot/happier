@@ -150,7 +150,7 @@ describe('createAcpRuntime provider-autonomous continuation', () => {
     expect(messages.filter((m) => m === 'AUTONOMOUS_PROSE_CONTINUATION')).toHaveLength(1);
   });
 
-  it('does not duplicate a summary that the continuation already emitted as prose', async () => {
+  it('persists a final summary as its own row after the continuation already emitted prose', async () => {
     const { backend, runtime, durableCalls } = createHarness();
     await runtime.startOrLoad({});
 
@@ -171,9 +171,32 @@ describe('createAcpRuntime provider-autonomous continuation', () => {
 
     const messages = persistedRowMessages(durableCalls);
     expect(messages.filter((m) => m === 'CONTINUATION_PROSE')).toHaveLength(1);
-    // The maintained fork rule: the task_complete summary is a fallback for a segment
-    // that produced no ordinary assistant message, never an extra duplicate row.
-    expect(messages).not.toContain('CONTINUATION_SUMMARY');
+    // PA-AC-003: commentary must not swallow the final answer. The summary is distinct text,
+    // so it is published exactly once as its own durable row beside the commentary.
+    expect(messages.filter((m) => m === 'CONTINUATION_SUMMARY')).toHaveLength(1);
+  });
+
+  it('does not republish a summary the continuation already said verbatim', async () => {
+    const { backend, runtime, durableCalls } = createHarness();
+    await runtime.startOrLoad({});
+
+    runtime.beginTurn();
+    backend.emit({ type: 'model-output', textDelta: 'STAGE_ONE' } satisfies AgentMessage);
+    await runtime.flushTurn();
+
+    beginContinuation(backend);
+    backend.emit({ type: 'model-output', textDelta: 'VERBATIM_ANSWER' } satisfies AgentMessage);
+    backend.emit({
+      type: 'tool-call',
+      toolName: 'task_complete',
+      args: { summary: 'VERBATIM_ANSWER' },
+      callId: 'call_verbatim',
+    } satisfies AgentMessage);
+    endContinuation(backend);
+    await runtime.waitForAutonomousContinuationIdle();
+
+    const messages = persistedRowMessages(durableCalls);
+    expect(messages.filter((m) => m === 'VERBATIM_ANSWER')).toHaveLength(1);
   });
 
   it('publishes a task lifecycle for the continuation instead of leaving it silent', async () => {
