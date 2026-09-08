@@ -845,6 +845,16 @@ export class AcpBackend implements AgentBackend {
    * stay closed, while a force-closed one is recoverable by resetting and starting again.
    */
   private providerConnectionForceClosed = false;
+  /**
+   * Identifies the current provider connection.
+   *
+   * ACP `session/update` notifications carry only `sessionId` and `update`; there is no
+   * request, turn or generation correlation, and the real Copilot provider emits no `_meta`.
+   * Once a cancellation cannot be correlated by the provider, the transport itself is the
+   * only remaining attribution boundary, so every notification is bound to the epoch of the
+   * connection that delivered it and stale epochs are rejected.
+   */
+  private connectionEpoch = 0;
   private replayCapture: AcpReplayCapture | null = null;
   /** Sole tool lifecycle/merge/timeout/finalization owner. */
   private readonly toolCalls: AcpToolCallTracker;
@@ -1404,8 +1414,17 @@ export class AcpBackend implements AgentBackend {
     });
 
     // Create client handlers. The generic connection owner registers these on the public SDK app API.
+    const notificationEpoch = ++this.connectionEpoch;
     const clientHandlers: AcpClientConnectionHandlers = {
       sessionUpdate: async (params: SessionNotification) => {
+        // Bound to the epoch of the connection that registered this handler, so output from a
+        // retired provider process can never be attributed to a later generation.
+        if (notificationEpoch !== this.connectionEpoch) {
+          logger.debug(
+            `[AcpBackend] Dropping session/update from retired connection epoch ${notificationEpoch} (current ${this.connectionEpoch})`,
+          );
+          return;
+        }
         await this.handleSessionUpdate(params);
       },
       requestPermission: async (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
@@ -4005,8 +4024,31 @@ export class AcpBackend implements AgentBackend {
     return true;
   }
 
+  /**
+   * Decide whether cancelling now leaves uncancellable provider work running.
+   *
+   * ACP cancellation is defined for a prompt turn: while a `session/prompt` request is in
+   * flight the agent settles that request, so cancellation is cooperative and the output that
+   * follows is still correlated to a known request.
+   *
+   * Provider-autonomous work runs *after* that request already resolved. Observed on the wire
+   * against Copilot 1.0.84: `session/cancel` sent during autonomous work drew no response of
+   * any kind, and the provider continued for a further 30 s, emitting a tool result, anonymous
+   * prose and a brand-new `task_complete` tool call id. Nothing in those notifications
+   * identifies the cancelled work, so neither a tool-id tombstone nor a quiet interval can
+   * establish provenance. The transport is the only sound boundary left.
+   */
+  private cancellationLeavesUncancellableProviderWork(): boolean {
+    if (!this.resolveAutonomousContinuationLimits()) return false;
+    // A live prompt request is cancellable by protocol, so attribution survives.
+    if (this.activePromptRpc || this.waitingForResponse) return false;
+    return this.autonomousContinuationGeneration !== null
+      || this.autonomousContinuationArmedGeneration !== null;
+  }
+
   async cancel(sessionId: SessionId): Promise<void> {
     this.promptCompletionSettlement = null;
+    const mustRetireConnection = this.cancellationLeavesUncancellableProviderWork();
     this.disarmAutonomousContinuation('cancelled by user', 'cancelled');
     if (this.waitingForResponse) {
       this.failPendingResponseWait(makeAbortError('Cancelled by user'));
@@ -4033,6 +4075,22 @@ export class AcpBackend implements AgentBackend {
     this.toolCalls.cancelAll();
 
     if (!this.connection || !this.acpSessionId) return;
+
+    if (mustRetireConnection) {
+      // Ask politely first: the provider may still choose to stop, and the notification is
+      // cheap. It is not waited on, because it carries no acknowledgement for this case.
+      void this.connection.peer
+        .cancel({ sessionId: this.acpSessionId })
+        .catch((error) => logger.debug('[AcpBackend] Error cancelling:', error));
+      logger.debug(
+        '[AcpBackend] Cancelled provider-autonomous work that ACP cannot cancel; retiring the provider connection',
+      );
+      this.providerConnectionForceClosed = true;
+      await this.cleanupInitializedProcessConnection({ graceMs: 250 });
+      this.activePromptRpc = null;
+      this.emit({ type: 'status', status: 'stopped', detail: 'Cancelled by user' });
+      return;
+    }
 
     const activePromptRpc = this.activePromptRpc;
     const cancelResult = this.connection.peer

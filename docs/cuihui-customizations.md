@@ -317,8 +317,73 @@ Truthful limits of that recovery:
   that provider supports resuming it. Nothing here guarantees that the provider
   retains its prior context.
 - Cancellation acceptance is unchanged: the turn is still marked aborted before
-  any recovery, and late output from the cancelled generation is still rejected
-  by the existing stale-generation guard.
+  any recovery. See the next section for why the stale-generation guard alone is
+  **not** sufficient for cancelled autonomous work.
+
+### Corrected defect: cancelled autonomous work was republished as the next turn's success
+
+An earlier revision of this document claimed that late output from a cancelled
+generation was rejected by the stale-generation guard. That claim was wrong for
+provider-autonomous work, and independent native execution disproved it: an
+active continuation was aborted and closed `outcome=cancelled`, the user's next
+prompt completed, and roughly 13 s later the cancelled work's tool result, prose
+and `task_complete` opened a **new** continuation after the completed generation
+and were published as success.
+
+The guard cannot help here, because the arming decision is per generation: once
+the next prompt completed, it legitimately armed *its own* generation, and the
+late frames were indistinguishable from that generation's own autonomous output.
+
+#### What the protocol actually provides
+
+Captured from the real wire against Copilot 1.0.84 with a transparent ACP stdio
+proxy:
+
+- `session/update` params contain exactly `sessionId` and `update`. There is no
+  request id, turn id or generation, and the provider emitted **no `_meta`** on
+  any notification.
+- Provider-autonomous output is emitted entirely *after* the `session/prompt`
+  request has already resolved with `end_turn`, so it belongs to no request.
+- `session/cancel` sent during autonomous work drew **no response of any kind**,
+  and the provider continued for a further 30 s, emitting the pending tool
+  result, anonymous prose, and a **brand-new** `task_complete` tool call id.
+
+Two consequences follow, and both are load-bearing:
+
+1. ACP cancellation is defined for a *prompt turn*. While a `session/prompt`
+   request is in flight the agent settles that request, so cancellation is
+   cooperative and attribution survives. Outside a request there is no
+   cancellation guarantee at all.
+2. Because the late frames carry a new tool id and anonymous prose, no tool-id
+   tombstone can cover them, and no quiet interval can prove the old work is
+   gone. Correlation at the protocol boundary is impossible.
+
+#### The boundary that is actually enforceable
+
+When cancellation would leave uncancellable provider work running, the provider
+**connection** is retired: a `session/cancel` is still sent as a courtesy, the
+connection is closed and the provider process tree is killed, and the backend is
+marked force-closed so the prompt loop reopens the session on the next prompt
+through the existing reset-and-resume path.
+
+Every connection carries an epoch, and each connection's notification handler is
+bound to the epoch that was current when it was created. Callbacks still in
+flight on a retired connection are dropped, so output from cancelled work cannot
+be attributed to a later generation even during the close window.
+
+This is deliberately scoped. It triggers only when the provider-autonomous
+continuation capability is enabled *and* a continuation is open or armed. A
+cooperative prompt-turn cancellation keeps its connection, and ACP providers
+that never arm continuations are unaffected.
+
+Truthful limits:
+
+- This guarantees that cancelled work cannot be **delivered or republished**. It
+  does not prove the provider stopped computing before its process was killed.
+- Recovery reopens the provider session, so the reply latency of the prompt
+  after such a cancellation includes a provider restart.
+- As above, provider-side context is only restored to the extent the provider
+  supports resuming it.
 
 ### Regression coverage
 
@@ -359,7 +424,10 @@ autopilot mode:
 4. Send a new prompt while a continuation is still running and confirm the
    continuation output persists under its own turn and the new turn is answered.
 5. Cancel during a continuation and confirm the session stops and reports
-   truthfully.
+   truthfully. Then send another prompt in the **same** session, wait past the
+   original tool delay, and reread the transcript: the cancelled work's markers
+   must never appear, and the new prompt must still be answered with
+   `pendingCount` back to zero.
 6. Confirm no duplicate assistant rows and that `pendingCount` and
    `pendingBlockedCount` both return to zero. In autopilot mode the provider
    may legitimately restate a summary in a following continuation; those are
