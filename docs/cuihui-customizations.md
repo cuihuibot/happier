@@ -376,14 +376,36 @@ continuation capability is enabled *and* a continuation is open or armed. A
 cooperative prompt-turn cancellation keeps its connection, and ACP providers
 that never arm continuations are unaffected.
 
+#### Retiring the transport alone is not enough
+
+Retiring the connection was necessary but not sufficient, and the live probe of
+the fix proved it. The provider keeps the unfinished job inside its **own**
+session state. When the recovery resumed the same provider session id
+(`session/load`), the provider restored the cancelled instruction, answered the
+user's new prompt, and then opened a fresh continuation that re-ran the entire
+cancelled plan — new tool call ids, the tool genuinely re-executed, and the
+result published under the new turn.
+
+So a cancellation that retires the connection also **poisons the provider
+session for resume**. The recovery still reopens immediately, keeping the
+Happier session usable, but it opens a *fresh* provider session rather than
+loading the abandoned one. Every other force-close, including the unresponsive
+process fallback, keeps the existing reset-and-resume recovery.
+
 Truthful limits:
 
-- This guarantees that cancelled work cannot be **delivered or republished**. It
-  does not prove the provider stopped computing before its process was killed.
+- This guarantees that cancelled work cannot be **delivered, republished, or
+  resurrected by resume**. It does not prove the provider stopped computing
+  before its process was killed.
 - Recovery reopens the provider session, so the reply latency of the prompt
   after such a cancellation includes a provider restart.
-- As above, provider-side context is only restored to the extent the provider
-  supports resuming it.
+- Because the fresh session is not the old one, provider-side context from
+  before the cancellation is dropped. The Happier transcript remains the source
+  of truth, and as stated above provider-side context was never guaranteed.
+- The poison is held for the life of the running session process. If that
+  process is restarted between the cancellation and the next prompt, a cold
+  start can still resume the old provider session id from its stored resume
+  reference. Cancel-then-restart-then-prompt is therefore not covered.
 
 ### Regression coverage
 

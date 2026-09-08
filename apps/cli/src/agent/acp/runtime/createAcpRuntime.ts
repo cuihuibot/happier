@@ -306,6 +306,11 @@ export type AcpRuntime = Readonly<{
   /** True only once the provider connection was force-closed and must be reopened. */
   isProviderConnectionForceClosed: () => boolean;
   /**
+   * True only once resuming the current provider session would resurrect cancelled work, so the
+   * recovery must open a fresh provider session instead of loading the old one.
+   */
+  isProviderSessionResumePoisoned: () => boolean;
+  /**
    * Whether this runtime supports "steering" additional user input into an already running turn.
    */
   supportsInFlightSteer: () => boolean;
@@ -389,6 +394,11 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
    * True only once the bounded cancellation fallback closed an unresponsive provider process.
    */
   isProviderConnectionForceClosed?: () => boolean;
+  /**
+   * True only once a cancellation retired the connection while the provider still owned
+   * uncancellable autonomous work, so its session must not be resumed.
+   */
+  isProviderSessionResumePoisoned?: () => boolean;
   /**
    * Optional provider-native ACP session mode change (e.g. "plan" vs "code").
    */
@@ -2400,6 +2410,11 @@ export function createAcpRuntime(params: {
     isProviderConnectionForceClosed(): boolean {
       if (!sessionId) return false;
       return backend?.isProviderConnectionForceClosed?.() === true;
+    },
+
+    isProviderSessionResumePoisoned(): boolean {
+      if (!sessionId) return false;
+      return backend?.isProviderSessionResumePoisoned?.() === true;
     },
     supportsInFlightSteer: () => inFlightSteerEnabled,
     isTurnInFlight: () => turnInFlight,
