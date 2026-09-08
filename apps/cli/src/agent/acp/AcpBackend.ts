@@ -4054,10 +4054,27 @@ export class AcpBackend implements AgentBackend {
    */
   private cancellationLeavesUncancellableProviderWork(): boolean {
     if (!this.resolveAutonomousContinuationLimits()) return false;
-    // A live prompt request is cancellable by protocol, so attribution survives.
-    if (this.activePromptRpc || this.waitingForResponse) return false;
-    return this.autonomousContinuationGeneration !== null
-      || this.autonomousContinuationArmedGeneration !== null;
+    // Autonomous work is already running outside any request, in any mode.
+    if (this.autonomousContinuationGeneration !== null
+      || this.autonomousContinuationArmedGeneration !== null) return true;
+    // An in-flight request is cancellable by protocol, and in ordinary mode that is enough:
+    // the provider drops the unfinished work with the request. Autopilot is different, because
+    // the goal outlives the request. Live on native v8, ordinary mode never revisited a
+    // cancelled task, while an autopilot session whose in-flight turn was cancelled opened a
+    // continuation after the *next* prompt on the same connection and re-ran the whole plan.
+    if (!this.isAutopilotSessionMode()) return false;
+    return this.activePromptRpc !== null || this.waitingForResponse;
+  }
+
+  /**
+   * True while the provider session runs in a mode that keeps pursuing a goal across turns.
+   *
+   * Cancelling such a turn settles the request but leaves the goal in the provider's own
+   * session state, so the provider session itself has to be abandoned.
+   */
+  private isAutopilotSessionMode(): boolean {
+    const modeId = this.sessionModeState?.currentModeId ?? '';
+    return modeId.endsWith('#autopilot');
   }
 
   async cancel(sessionId: SessionId): Promise<void> {
