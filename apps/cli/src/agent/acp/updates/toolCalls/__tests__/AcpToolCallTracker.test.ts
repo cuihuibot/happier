@@ -53,6 +53,25 @@ describe('createAcpToolCallTracker', () => {
     expect(calls.at(-1)?.toolName).toBe('edit');
   });
 
+  it('uses a specific provider identity for the first published revision', () => {
+    const calls: Array<{ toolName: string }> = [];
+    const tracker = createAcpToolCallTracker({
+      determineToolName: () => 'task_complete',
+      publishCall: (call) => calls.push(call),
+      publishResult: () => undefined,
+    });
+
+    tracker.observe({
+      toolCallId: 'task-complete-1',
+      kind: 'change_title',
+      status: 'completed',
+      rawInput: { summary: 'VISIBLE_TASK_COMPLETE_SUMMARY' },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.toolName).toBe('task_complete');
+  });
+
   it('seeds terminal-only calls through the same call publication before the result', () => {
     const order: string[] = [];
     const tracker = createAcpToolCallTracker({

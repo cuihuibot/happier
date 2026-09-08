@@ -96,6 +96,20 @@ const ACP_FAILURE_TRACE_ENV = 'HAPPIER_ACP_FAILURE_TRACE';
 type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
 type RuntimeSessionMediaSource = RuntimeSessionMediaMessage['media'][number];
 type RuntimeSessionMediaPersistResult = SessionMediaPersistResult;
+
+function readTaskCompleteSummary(msg: Extract<AgentMessage, { type: 'tool-call' }>): string | null {
+  const args = asRecord(msg.args);
+  const summary = typeof args?.summary === 'string' ? args.summary.trim() : '';
+  if (!summary) return null;
+
+  const acp = asRecord(args?._acp);
+  const isTaskComplete =
+    msg.toolName === 'task_complete'
+    || args?.description === 'task_complete'
+    || acp?.title === 'task_complete';
+  return isTaskComplete ? summary : null;
+}
+
 type AcpPendingQueueCommon = {
   maxPopPerWake?: number;
   drainDuringTurn?: boolean;
@@ -582,6 +596,7 @@ export function createAcpRuntime(params: {
   let accumulatedThinkingText = '';
   let isResponseInProgress = false;
   let taskStartedSent = false;
+  let taskCompleteSummaryFallback: string | null = null;
   let turnAborted = false;
   let pendingTurnOutcome: AcpTurnOutcome | null = null;
   let loadingSession = false;
@@ -843,6 +858,7 @@ export function createAcpRuntime(params: {
     accumulatedThinkingText = '';
     isResponseInProgress = false;
     taskStartedSent = false;
+    taskCompleteSummaryFallback = null;
     turnAborted = false;
     pendingTurnOutcome = null;
     currentTurnId = null;
@@ -1462,6 +1478,8 @@ export function createAcpRuntime(params: {
             forwarder.forward(msg);
             break;
           }
+
+          taskCompleteSummaryFallback = readTaskCompleteSummary(msg) ?? taskCompleteSummaryFallback;
 
           accumulatedAssistantSegmentResponse = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
@@ -2556,6 +2574,21 @@ export function createAcpRuntime(params: {
     },
 
     async flushTurn(): Promise<void> {
+      if (!turnAborted && !accumulatedResponse.trim() && taskCompleteSummaryFallback) {
+        const summary = taskCompleteSummaryFallback;
+        handleAcpModelOutputDelta({
+          delta: summary,
+          messageBuffer: params.messageBuffer,
+          getIsResponseInProgress: () => isResponseInProgress,
+          setIsResponseInProgress: (value) => { isResponseInProgress = value; },
+          appendToAccumulatedResponse: (delta) => {
+            accumulatedResponse += delta;
+            accumulatedAssistantSegmentResponse += delta;
+          },
+        });
+        params.turnAssistantPreviewTracker?.replace(accumulatedResponse);
+        streamedTranscriptWriter.appendAssistantDelta(summary);
+      }
       await waitForPendingTurnBoundaryStreamFlush();
       await drainPendingSessionMediaPersistence();
       const unavailableSessionMedia = [...unavailableSessionMediaByDedupeKey.values()].flat();

@@ -80,6 +80,35 @@ describe('CopilotTransport determineToolName', () => {
       ),
     ).toBe('bash');
   });
+
+  it('corrects a task_complete snapshot that ACP initially labels as change_title', () => {
+    expect(
+      copilotTransport.determineToolName(
+        'change_title',
+        'call-task-complete-1',
+        {
+          summary: 'VISIBLE_COMPLETION',
+        },
+        DEFAULT_CONTEXT,
+      ),
+    ).toBe('task_complete');
+  });
+
+  it('corrects task_complete after ACP enrichment adds its tool title', () => {
+    expect(
+      copilotTransport.determineToolName(
+        'change_title',
+        'call-task-complete-1',
+        {
+          summary: 'VISIBLE_COMPLETION',
+          title: 'task_complete',
+          description: 'task_complete',
+          _acp: { title: 'task_complete' },
+        },
+        DEFAULT_CONTEXT,
+      ),
+    ).toBe('task_complete');
+  });
 });
 
 describe('CopilotTransport handleStderr', () => {

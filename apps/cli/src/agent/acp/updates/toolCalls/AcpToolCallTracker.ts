@@ -244,9 +244,12 @@ export function createAcpToolCallTracker<TimerHandle = ReturnType<typeof setTime
           currentName: seedName,
           snapshot,
         });
+        const providerIdentity = typeof determined === 'string' ? determined.trim() : '';
         record = {
           snapshot,
-          toolName: resolveBestToolCallIdentity({ previous: seedName, candidate: determined }),
+          toolName: providerIdentity && !isGenericToolCallIdentity(providerIdentity)
+            ? providerIdentity
+            : seedName,
           revision: 1,
           startedAt: timestamp,
           updatedAt: timestamp,

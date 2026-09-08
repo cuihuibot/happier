@@ -40,6 +40,11 @@ export const COPILOT_TIMEOUTS = {
 
 const COPILOT_TOOL_PATTERNS: readonly ToolPatternWithInputFields[] = [
   {
+    name: 'task_complete',
+    patterns: ['task_complete', 'task-complete'],
+    inputFields: ['summary'],
+  },
+  {
     name: 'change_title',
     patterns: CHANGE_TITLE_TOOL_NAME_ALIASES,
     inputFields: ['title'],
@@ -126,6 +131,21 @@ export class CopilotTransport implements TransportHandler {
   ): string {
     const shellBridgeToolName = extractHappierToolsShellBridgeToolNameHint(input);
     if (shellBridgeToolName) return shellBridgeToolName;
+
+    const acp = input._acp;
+    const acpTitle = acp && typeof acp === 'object' && !Array.isArray(acp)
+      ? (acp as { title?: unknown }).title
+      : null;
+    const taskCompleteSummary = typeof input.summary === 'string' ? input.summary.trim() : '';
+    if (
+      taskCompleteSummary
+      && (
+        (toolName === 'change_title' && (typeof input.title !== 'string' || acpTitle === 'task_complete'))
+        || ((toolName === 'other' || toolName === 'Unknown tool') && acpTitle === 'task_complete')
+      )
+    ) {
+      return 'task_complete';
+    }
 
     const directToolName = findToolNameFromId(toolName, COPILOT_TOOL_PATTERNS, { preferLongestMatch: true });
     if (directToolName) return directToolName;
