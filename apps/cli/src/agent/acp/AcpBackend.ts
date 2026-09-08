@@ -839,6 +839,12 @@ export class AcpBackend implements AgentBackend {
   private connection: AcpClientConnection | null = null;
   private acpSessionId: string | null = null;
   private disposed = false;
+  /**
+   * True only while a provider connection that was force-closed by the bounded cancellation
+   * fallback has not been reopened. Disposal is deliberately excluded: a disposed backend must
+   * stay closed, while a force-closed one is recoverable by resetting and starting again.
+   */
+  private providerConnectionForceClosed = false;
   private replayCapture: AcpReplayCapture | null = null;
   /** Sole tool lifecycle/merge/timeout/finalization owner. */
   private readonly toolCalls: AcpToolCallTracker;
@@ -1807,6 +1813,7 @@ export class AcpBackend implements AgentBackend {
         throw new Error('New session response did not include a session id');
       }
       this.acpSessionId = sessionId;
+      this.providerConnectionForceClosed = false;
       logger.debug(`[AcpBackend] Session created: ${sessionId}`);
 
       this.seedSessionModesFromSessionResponse(sessionResponse);
@@ -1899,6 +1906,7 @@ export class AcpBackend implements AgentBackend {
       );
 
       this.acpSessionId = normalized;
+      this.providerConnectionForceClosed = false;
       logger.debug(`[AcpBackend] Session loaded: ${normalized}`);
 
       this.seedSessionModesFromSessionResponse(sessionResponse);
@@ -1975,6 +1983,7 @@ export class AcpBackend implements AgentBackend {
       }
 
       this.acpSessionId = forkedSessionId;
+      this.providerConnectionForceClosed = false;
       this.seedSessionModesFromSessionResponse(response);
       this.seedSessionModelsFromSessionResponse(response);
       this.seedSessionConfigOptionsFromSessionResponse(response);
@@ -4043,6 +4052,7 @@ export class AcpBackend implements AgentBackend {
     if (settlementTimer) clearTimeout(settlementTimer);
     if (!settledInTime) {
       logger.debug('[AcpBackend] Cancellation acknowledgement or prompt RPC did not settle; closing the ACP connection');
+      this.providerConnectionForceClosed = true;
       await this.cleanupInitializedProcessConnection({ graceMs: 250 });
       if (this.activePromptRpc === activePromptRpc) {
         this.activePromptRpc = null;
@@ -4067,6 +4077,16 @@ export class AcpBackend implements AgentBackend {
    * @param requestId - The ID of the permission request
    * @param approved - Whether the permission was granted
    */
+  /**
+   * True once the bounded cancellation fallback closed an unresponsive provider connection.
+   * Every later prompt on this backend is rejected before effect, so the runtime uses this to
+   * reopen the session instead of stranding it. Disposal is deliberately not reported here:
+   * a disposed backend must stay closed.
+   */
+  isProviderConnectionForceClosed(): boolean {
+    return this.providerConnectionForceClosed;
+  }
+
   async respondToPermission(requestId: string, approved: boolean): Promise<void> {
     logger.debug(`[AcpBackend] Permission response event (UI only): ${requestId} = ${approved}`);
     this.emit({ type: 'permission-response', id: requestId, approved });

@@ -44,6 +44,12 @@ type PromptRuntime = {
   settleAutonomousContinuation?: () => Promise<void>;
   reset: () => Promise<void>;
   getSessionId: () => string | null;
+  /**
+   * True only when the bounded cancellation fallback force-closed an unresponsive provider
+   * connection, which leaves the backend rejecting every later prompt. Absent or false means
+   * the runtime is usable and must not be restarted.
+   */
+  isProviderConnectionForceClosed?: () => boolean;
   shouldResumeAfterPermissionModeChange?: () => boolean;
 };
 
@@ -119,6 +125,13 @@ export async function runPermissionModePromptLoop(opts: {
   messageBuffer: MessageBuffer;
   shouldExit: () => boolean;
   getAbortSignal: () => AbortSignal;
+  /**
+   * Resolves when an in-flight explicit abort has finished and the abort signal is no longer
+   * aborted. Without it, an aborted signal makes every input wait return immediately and the
+   * loop spins on the microtask queue, starving the event loop that the cancellation itself
+   * needs to complete.
+   */
+  waitForAbortSettled?: () => Promise<void>;
   keepAlive: () => void;
   setThinking: (value: boolean) => void;
   sendReady: (context?: ReadyNotificationTurnContext) => void;
@@ -250,8 +263,44 @@ export async function runPermissionModePromptLoop(opts: {
 
   overrideSync.syncFromMetadata();
 
+  /**
+   * An input wait can return `null` without ever awaiting anything the event loop has to
+   * service: it returns immediately while the abort signal is aborted or while provider input
+   * admission is closed. Continuing straight back into the wait then busy-spins the microtask
+   * queue and starves timers, I/O and logging, so the cancellation that owns the signal can
+   * never finish and the session never accepts another prompt.
+   *
+   * Always yield a macrotask, and when an abort is in flight wait for it to actually settle
+   * rather than polling a signal that cannot change until it does.
+   */
+  const settleEmptyInputWait = async (): Promise<void> => {
+    if (opts.getAbortSignal().aborted) {
+      try {
+        await opts.waitForAbortSettled?.();
+      } catch {
+        // The abort operation reports its own failure; never spin on it here.
+      }
+    }
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+  };
+
   const ensureRuntimeStarted = async (): Promise<{ startedFreshSessionForTurn: boolean }> => {
-    if (wasStarted) return { startedFreshSessionForTurn: false };
+    if (wasStarted) {
+      if (opts.runtime.isProviderConnectionForceClosed?.() !== true) {
+        return { startedFreshSessionForTurn: false };
+      }
+      // The provider connection was closed by the bounded cancellation fallback. Recover
+      // through the existing reset-and-resume path instead of stranding the live session on a
+      // backend that rejects every prompt.
+      const resumeId = readNonBlankOpaqueIdentifier(opts.runtime.getSessionId()) ?? '';
+      opts.messageBuffer.addMessage(`Reconnecting ${opts.providerName} session…`, 'status');
+      await opts.runtime.reset();
+      wasStarted = false;
+      if (opts.shouldExit()) return { startedFreshSessionForTurn: false };
+      storedSessionIdForResume = resumeId ? { value: resumeId, origin: 'restart' } : null;
+      await opts.onAfterReset?.();
+      if (opts.shouldExit()) return { startedFreshSessionForTurn: false };
+    }
 
     const resume = storedSessionIdForResume;
     const resumeId = readNonBlankOpaqueIdentifier(resume?.value) ?? '';
@@ -356,7 +405,10 @@ export async function runPermissionModePromptLoop(opts: {
           }
         },
       });
-      if (!next) continue;
+      if (!next) {
+        await settleEmptyInputWait();
+        continue;
+      }
       message = {
         message: next.message,
         mode: next.mode,
@@ -479,7 +531,9 @@ export async function runPermissionModePromptLoop(opts: {
       }
       opts.runtime.beginTurn();
       didBeginRuntimeTurn = true;
-      if (!wasStarted) {
+      // A provider connection closed by the bounded cancellation fallback rejects every prompt,
+      // so a started-but-closed session still has to go back through the start path.
+      if (!wasStarted || opts.runtime.isProviderConnectionForceClosed?.() === true) {
         const runtimeStart = await ensureRuntimeStarted();
         if (opts.shouldExit()) {
           shouldSendReady = false;
