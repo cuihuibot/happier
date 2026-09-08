@@ -889,6 +889,38 @@ describe('registerMachineRpcHandlers', () => {
     expect(forwardedSpawn?.workspaceCheckoutId).toBeUndefined();
   });
 
+  it('normalizes legacy agent fields on the provider-safe spawn RPC', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async () => ({ type: 'success', sessionId: 's1' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE);
+    expect(handler).toBeDefined();
+
+    await handler!({
+      type: 'spawn-in-directory',
+      directory: '/tmp',
+      agent: 'copilot',
+    });
+
+    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
+      backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+    }));
+  });
+
   it('maps duplicate in-flight daemon spawn nonce envelopes to a retryable spawn timeout error', async () => {
     const registered = new Map<string, (params: any) => Promise<any>>();
     const rpcHandlerManager = {

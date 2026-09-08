@@ -149,6 +149,7 @@ export type LegacySpawnHappySessionRpcParams = {
     directory: string
     approvedNewDirectoryCreation?: boolean
     agent?: string
+    spawnNonce?: string
     profileId?: string
     environmentVariables?: Record<string, string>
     resume?: string
@@ -214,6 +215,9 @@ function buildLegacySpawnHappySessionRpcParams(options: SpawnSessionOptions): Le
         directory: params.directory,
         approvedNewDirectoryCreation: params.approvedNewDirectoryCreation,
         agent: legacyAgent,
+        ...(typeof params.spawnNonce === 'string' && params.spawnNonce.trim()
+            ? { spawnNonce: params.spawnNonce }
+            : {}),
         profileId: params.profileId,
         environmentVariables: params.environmentVariables,
         resume: params.resume,

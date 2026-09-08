@@ -97,6 +97,56 @@ describe('createAcpRuntime (transcript streaming vNext)', () => {
     });
   });
 
+  it('persists a task_complete summary when the provider emits no assistant text', async () => {
+    const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_main' });
+    const durableCalls: Array<{ body: ACPMessageData; meta?: Record<string, unknown> }> = [];
+    const session = createBasicSessionClientWithOverrides({
+      sendAgentMessageCommitted: async (_provider, body, opts) => {
+        durableCalls.push({ body, meta: opts.meta });
+      },
+    });
+    const runtime = createAcpRuntime({
+      provider: 'copilot',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+    backend.emit({
+      type: 'tool-call',
+      toolName: 'change_title',
+      args: {
+        summary: 'VISIBLE_TASK_COMPLETE_SUMMARY',
+        description: 'task_complete',
+        _acp: {
+          kind: 'other',
+          title: 'task_complete',
+          rawInput: { summary: 'VISIBLE_TASK_COMPLETE_SUMMARY' },
+        },
+      },
+      callId: 'task-complete-1',
+    } satisfies AgentMessage);
+    backend.emit({
+      type: 'tool-result',
+      toolName: 'change_title',
+      result: { ok: true },
+      callId: 'task-complete-1',
+    } satisfies AgentMessage);
+
+    await runtime.flushTurn();
+
+    expect(durableCalls.some(
+      (call) => call.body.type === 'message'
+        && call.body.message === 'VISIBLE_TASK_COMPLETE_SUMMARY',
+    )).toBe(true);
+  });
+
   it.each([
     { snapshotScope: 'segment' as const, finalSnapshot: 'Final answer.' },
     { snapshotScope: 'turn' as const, finalSnapshot: 'Progress update.Final answer.' },

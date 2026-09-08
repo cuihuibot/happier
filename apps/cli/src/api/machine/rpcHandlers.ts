@@ -684,6 +684,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       machineId,
       approvedNewDirectoryCreation,
       backendTarget,
+      agent,
       environmentVariables,
       profileId,
       terminal,
@@ -777,21 +778,31 @@ export function registerMachineRpcHandlers(params: Readonly<{
         ? attachMetadataIdentityPolicy
         : undefined;
     const normalizedBackendTarget = (() => {
-      const parsed = BackendTargetRefSchema.safeParse(backendTarget);
-      if (!parsed.success) return undefined;
-      if (parsed.data.kind === 'builtInAgent') {
-        const agentId = parsed.data.agentId.trim();
-        if (!isKnownAgentId(agentId)) {
-          return null;
+      if (backendTarget !== undefined && backendTarget !== null) {
+        const parsed = BackendTargetRefSchema.safeParse(backendTarget);
+        if (!parsed.success) return undefined;
+        if (parsed.data.kind === 'builtInAgent') {
+          const agentId = parsed.data.agentId.trim();
+          if (!isKnownAgentId(agentId)) {
+            return null;
+          }
+          return {
+            kind: 'builtInAgent' as const,
+            agentId,
+          };
         }
         return {
-          kind: 'builtInAgent' as const,
-          agentId,
+          kind: 'configuredAcpBackend' as const,
+          backendId: parsed.data.backendId.trim(),
         };
       }
+
+      const legacyAgentId = typeof agent === 'string' ? agent.trim() : '';
+      if (!legacyAgentId) return undefined;
+      if (!isKnownAgentId(legacyAgentId)) return null;
       return {
-        kind: 'configuredAcpBackend' as const,
-        backendId: parsed.data.backendId.trim(),
+        kind: 'builtInAgent' as const,
+        agentId: legacyAgentId,
       };
     })();
     if (normalizedBackendTarget === null) {

@@ -211,6 +211,28 @@ describe('buildSpawnHappySessionRpcParams', () => {
         })).toHaveProperty('pendingFirstInput', options.pendingFirstInput);
     });
 
+    it('preserves the caller-owned spawn nonce on legacy-compatible payloads', () => {
+        const params = buildCompatibleSpawnHappySessionRpcParams({
+            options: {
+                machineId: 'machine-1',
+                directory: '/tmp/workspace',
+                backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+                spawnNonce: 'spawn-nonce-owned-by-ui',
+                pendingFirstInput: {
+                    localId: 'local-first-input',
+                    text: 'Start the session',
+                },
+            },
+            daemonCliVersion: '0.2.11-local-final3',
+        });
+
+        expect(params).toEqual(expect.objectContaining({
+            agent: 'copilot',
+            spawnNonce: 'spawn-nonce-owned-by-ui',
+        }));
+        expect(params).not.toHaveProperty('pendingFirstInput');
+    });
+
     // A creation ingress that drops `sourceContext` produces an ordinary blank
     // Session and reports success — a silent, invisible wrong outcome. This
     // payload owner is the UI half of the "no ingress drops the recipe" invariant.

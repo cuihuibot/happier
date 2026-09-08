@@ -67,6 +67,7 @@ describe('canonicalizeToolNameV2 mappings', () => {
     { toolName: 'task_output', expected: 'TaskOutput' },
     { toolName: 'TaskStop', expected: 'TaskStop' },
     { toolName: 'task_stop', expected: 'TaskStop' },
+    { toolName: 'task_complete', expected: 'task_complete' },
   ])('keeps `$toolName` as its own tool `$expected` instead of collapsing it to SubAgent', ({ toolName, expected }) => {
     expect(canonicalize(toolName)).toBe(expected);
   });

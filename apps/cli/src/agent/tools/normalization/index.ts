@@ -282,6 +282,7 @@ export function canonicalizeToolNameV2(opts: {
     // before the `task*` prefix rule below swallows them into the subagent family.
     if (lower === 'taskoutput' || lower === 'task_output') return 'TaskOutput';
     if (lower === 'taskstop' || lower === 'task_stop') return 'TaskStop';
+    if (lower === 'task_complete' || lower === 'task-complete') return 'task_complete';
 
     // Tasks / notebooks.
     // Claude emits TaskCreate/TaskList/TaskUpdate; keep them unified for rendering.
