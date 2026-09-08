@@ -235,12 +235,15 @@ describe('cancelled autonomous work ownership', () => {
     h.backend.dispose?.();
   });
 
-  it('keeps cooperative prompt-turn cancellation on the connection', async () => {
+  it('keeps cooperative prompt-turn cancellation on the connection in ordinary mode', async () => {
     const h = await createRuntimeHarness();
     const internals = h.backend as unknown as Record<string, unknown>;
 
-    // An in-flight prompt request is cancellable by protocol: attribution survives, so the
-    // connection must be preserved and the round-4 cooperative behaviour kept.
+    // Ordinary mode drops the unfinished work with the cancelled request. Verified live on
+    // native v8: the cancelled tool never produced a result, the next prompt was answered, and
+    // the provider never revisited the abandoned task. So this path must keep its connection
+    // and its provider context.
+    internals.sessionModeState = { currentModeId: 'ordinary', availableModes: [] };
     internals.turnGeneration = 1;
     internals.dispatchedPromptTurnGeneration = 1;
     internals.waitingForResponse = true;
@@ -249,13 +252,41 @@ describe('cancelled autonomous work ownership', () => {
 
     expect(
       h.backend.isProviderConnectionForceClosed(),
-      'a cooperative cancellation must not retire a healthy provider connection',
+      'an ordinary-mode cancellation must not retire a healthy provider connection',
     ).toBe(false);
     expect(internals.connection).not.toBeNull();
     expect(
       h.backend.isProviderSessionResumePoisoned(),
-      'a cooperatively cancelled session keeps its provider context and stays resumable',
+      'an ordinary-mode cancelled session keeps its provider context and stays resumable',
     ).toBe(false);
+
+    h.backend.dispose?.();
+  });
+
+  it('retires an autopilot turn cancellation because the goal outlives the request', async () => {
+    const h = await createRuntimeHarness();
+    const internals = h.backend as unknown as Record<string, unknown>;
+
+    // Observed live on native v8 in Happier session `cmtsvz30u0kzbnpp8emf8gp0q`: the abort
+    // landed while the prompt request was still in flight, so no continuation was open and
+    // nothing was retired. The provider settled the request, answered the next prompt, then
+    // opened a continuation *after that completed generation* — on the same connection, with no
+    // resume — and re-ran the entire cancelled plan, publishing it as success.
+    internals.sessionModeState = {
+      currentModeId: 'https://agentclientprotocol.com/protocol/session-modes#autopilot',
+      availableModes: [],
+    };
+    internals.turnGeneration = 1;
+    internals.dispatchedPromptTurnGeneration = 1;
+    internals.waitingForResponse = true;
+
+    await h.backend.cancel(SESSION_ID as never);
+
+    expect(
+      h.backend.isProviderConnectionForceClosed(),
+      'an autopilot goal survives its cancelled request, so the provider session must go',
+    ).toBe(true);
+    expect(h.backend.isProviderSessionResumePoisoned()).toBe(true);
 
     h.backend.dispose?.();
   });

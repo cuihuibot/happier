@@ -371,10 +371,31 @@ bound to the epoch that was current when it was created. Callbacks still in
 flight on a retired connection are dropped, so output from cancelled work cannot
 be attributed to a later generation even during the close window.
 
-This is deliberately scoped. It triggers only when the provider-autonomous
-continuation capability is enabled *and* a continuation is open or armed. A
-cooperative prompt-turn cancellation keeps its connection, and ACP providers
-that never arm continuations are unaffected.
+#### When retirement triggers, and why cancelling an autopilot turn is not cooperative
+
+Retirement requires the provider-autonomous continuation capability, so ACP
+providers that never arm continuations are unaffected. Within that scope it
+triggers when either:
+
+- a continuation is already open or armed, in any mode — the provider is running
+  work that no request owns; or
+- the session is in autopilot mode and a prompt request is in flight.
+
+The second case is the one that is easy to get wrong. ACP cancellation settles
+the *request*, but an autopilot session's **goal** outlives it. Live on native
+v8, an autopilot turn was cancelled while its request was still in flight, so
+nothing was retired: the provider settled the request, answered the user's next
+prompt, and then opened a continuation after that completed generation — on the
+same connection, with no resume at all — and re-ran the entire cancelled plan,
+publishing it as that turn's success.
+
+Ordinary mode was tested the same way and behaves differently, which is why the
+trigger is scoped rather than applied to every cancellation: the cancelled tool
+never produced a result, the next prompt was answered normally, and the provider
+never revisited the abandoned task. Ordinary-mode cancellation therefore keeps
+its connection and its provider context.
+
+An idle cancellation — no turn in flight and no continuation — retires nothing.
 
 #### Retiring the transport alone is not enough
 
@@ -406,6 +427,10 @@ Truthful limits:
   process is restarted between the cancellation and the next prompt, a cold
   start can still resume the old provider session id from its stored resume
   reference. Cancel-then-restart-then-prompt is therefore not covered.
+- Owner-visible tradeoff: because an autopilot turn cancellation now retires the
+  provider session, cancelling in an autopilot session discards provider-side
+  context and makes the next prompt pay a provider restart. That is the cost of
+  the cancellation actually holding. Ordinary-mode cancellation is unchanged.
 
 ### Regression coverage
 
