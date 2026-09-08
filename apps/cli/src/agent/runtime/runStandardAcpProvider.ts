@@ -440,6 +440,9 @@ export async function runStandardAcpProvider(
   let thinking = false;
   let shouldExit = false;
   let abortController = new AbortController();
+  // Set while an explicit abort is running so the prompt loop can wait for it instead of
+  // spinning on a signal that is already aborted.
+  let abortSettledSignal: Promise<void> | null = null;
   const getKeepAliveMode = (): KeepAliveMode => config.resolveKeepAliveMode?.() ?? 'remote';
   let lastKeepAliveSentAt = 0;
   let lastKeepAliveSignature: string | null = null;
@@ -593,8 +596,10 @@ export async function runStandardAcpProvider(
       }
     })();
     explicitAbortPromise = operation;
+    abortSettledSignal = operation;
     const clearExplicitAbort = (): void => {
       if (explicitAbortPromise === operation) explicitAbortPromise = null;
+      if (abortSettledSignal === operation) abortSettledSignal = null;
     };
     void operation.then(clearExplicitAbort, clearExplicitAbort);
     return operation;
@@ -699,6 +704,9 @@ export async function runStandardAcpProvider(
       messageBuffer,
       shouldExit: () => shouldExit,
       getAbortSignal: () => abortController.signal,
+      waitForAbortSettled: async () => {
+        await abortSettledSignal?.catch(() => undefined);
+      },
       keepAlive: sendKeepAlive,
       setThinking: setThinkingState,
       sendReady,

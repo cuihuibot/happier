@@ -269,6 +269,57 @@ segment. The rules are:
   later turn carries a new call id and gets its own row.
 - The pre-existing empty-response fallback is unchanged.
 
+### Corrected defect: cancelling active work stranded the session
+
+An authenticated `abort` issued while the provider was running a tool never
+acknowledged (30 s session-RPC timeout), and the same session then refused every
+later prompt (`pendingCount=1`, 90 s send timeout). The runtime process stayed
+alive at several hundred percent CPU with logging and keep-alives frozen.
+
+The cause was a **busy-spin livelock in the prompt loop**, not a blocked network
+await, and it predates this fork's continuation work — the same code is present
+at the fork base `0d99e212`:
+
+1. `handleAbort()` aborts the shared `AbortController` and only replaces it in
+   its `finally`, i.e. after cancellation has fully settled.
+2. `waitForNextInput()` returns `null` immediately while that signal is aborted.
+3. The loop used to `continue` straight back into the wait, producing an
+   unbounded microtask loop — measured at over 20 000 iterations in 155 ms, and
+   at more than 2^32 iterations in ~15 s before an array overflowed.
+4. That starves the event loop, so no timer, socket read or log flush runs. The
+   cancellation it is waiting for can therefore never finish, which keeps the
+   signal aborted: the livelock is self-reinforcing, and the pending prompt is
+   never consumed.
+
+The loop now settles instead of spinning. On an empty input wait it always
+yields a macrotask, and while an abort is in flight it awaits the abort's own
+settlement promise (`waitForAbortSettled`) rather than polling a signal that
+cannot change until that promise resolves. This is lifecycle-driven; it is not a
+grace sleep, and no timeout was added to the abort RPC — a cancellation that
+genuinely cannot settle still surfaces as a truthful RPC timeout rather than a
+fabricated success.
+
+`AcpBackend.cancel()` already had a bounded 5 s settlement fallback that closes
+an unresponsive provider connection. That fallback left the backend rejecting
+every later prompt with `rejected_before_effect / 'Session not started'`, with
+no way for the runtime to notice. The backend now reports
+`isProviderConnectionForceClosed()`, and the prompt loop routes a force-closed
+session back through the existing reset-and-resume path before the next turn.
+
+Truthful limits of that recovery:
+
+- The flag is set **only** by the cancellation fallback. Disposal is not
+  reported as a force-close, so a disposed or intentionally closed session stays
+  closed and is never blindly reopened.
+- Recovery starts a **new provider process**. Happier's transcript is preserved
+  and remains the source of truth, and the previous provider session id is
+  offered for resume, but provider-side context is only restored to the extent
+  that provider supports resuming it. Nothing here guarantees that the provider
+  retains its prior context.
+- Cancellation acceptance is unchanged: the turn is still marked aborted before
+  any recovery, and late output from the cancelled generation is still rejected
+  by the existing stale-generation guard.
+
 ### Regression coverage
 
 ```bash
@@ -278,7 +329,9 @@ yarn vitest run \
   src/agent/acp/runtime/__tests__/createAcpRuntime.autonomousContinuation.test.ts \
   src/agent/acp/runtime/__tests__/createAcpRuntime.continuationOutcome.test.ts \
   src/agent/acp/runtime/__tests__/createAcpRuntime.continuationCap.test.ts \
-  src/agent/acp/runtime/__tests__/createAcpRuntime.sameTurnSummary.test.ts
+  src/agent/acp/runtime/__tests__/createAcpRuntime.sameTurnSummary.test.ts \
+  src/agent/acp/__tests__/AcpBackend.cancelForceClose.test.ts \
+  src/agent/runtime/runPermissionModePromptLoop.cancellationLivelock.test.ts
 yarn vitest run src/agent/acp src/backends/copilot src/agent/runtime
 yarn typecheck
 ```
@@ -286,7 +339,10 @@ yarn typecheck
 `createAcpRuntime.continuationOutcome.test.ts` drives the *real* `AcpBackend`
 stall timer, terminal correlation, cancellation and disposal paths into the real
 runtime projection, so the outcome contract is covered end to end rather than by
-a synthetic handler event.
+a synthetic handler event. `AcpBackend.cancelForceClose.test.ts` drives the real
+`cancel()` settlement fallback against an unresponsive provider peer, and
+`runPermissionModePromptLoop.cancellationLivelock.test.ts` fails if the prompt
+loop starves the event loop while the abort signal is aborted.
 
 The live acceptance check must use a real Copilot-managed Happier session in
 autopilot mode:
@@ -359,6 +415,10 @@ is not acceptance evidence on its own.
 - The reproduction proves the isolated continuation-loss defect only. It does
   not establish that every historically reported missing-prose or fast-turn
   symptom shares this cause.
+- Cancellation recovery reopens a force-closed provider connection; it does not
+  guarantee that the provider restores its prior context. Only cancellations
+  that hit the bounded settlement fallback trigger a reopen, and a cancellation
+  that cannot settle at all still surfaces as a truthful RPC timeout.
 
 ### Compatibility and rollback
 

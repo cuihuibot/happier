@@ -303,6 +303,8 @@ function stringifySessionConfigOptionValue(value: string | number | boolean | nu
 
 export type AcpRuntime = Readonly<{
   getSessionId: () => string | null;
+  /** True only once the provider connection was force-closed and must be reopened. */
+  isProviderConnectionForceClosed: () => boolean;
   /**
    * Whether this runtime supports "steering" additional user input into an already running turn.
    */
@@ -383,6 +385,10 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
     sessionId: string,
     payload: AgentPromptPayload,
   ) => Promise<AcpPromptSubmissionEvidence>;
+  /**
+   * True only once the bounded cancellation fallback closed an unresponsive provider process.
+   */
+  isProviderConnectionForceClosed?: () => boolean;
   /**
    * Optional provider-native ACP session mode change (e.g. "plan" vs "code").
    */
@@ -2390,6 +2396,11 @@ export function createAcpRuntime(params: {
 
   return runtimeRef = {
     getSessionId: () => sessionId,
+
+    isProviderConnectionForceClosed(): boolean {
+      if (!sessionId) return false;
+      return backend?.isProviderConnectionForceClosed?.() === true;
+    },
     supportsInFlightSteer: () => inFlightSteerEnabled,
     isTurnInFlight: () => turnInFlight,
 
