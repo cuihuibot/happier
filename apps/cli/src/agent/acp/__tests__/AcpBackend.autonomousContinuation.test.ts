@@ -92,6 +92,51 @@ describe('AcpBackend provider-autonomous continuation', () => {
     expect(JSON.stringify((toolCall as any).args)).toContain('QRP_366AC45A_STAGE_TWO');
   });
 
+  it('closes the continuation immediately on a status-only task_complete tool_call_update', async () => {
+    // Copilot sends `tool_call` with the title and `tool_call_update` with status only, so the
+    // terminal detector must correlate the completion by toolCallId rather than by title.
+    const { backend, emitted } = createBackend({ providerAutonomousContinuation: { stallMs: 600_000 } });
+    completePromptTurn(backend);
+
+    await (backend as any).handleSessionUpdate({ sessionId: SESSION_ID, update: taskCompleteToolCall });
+    await (backend as any).handleSessionUpdate({
+      sessionId: SESSION_ID,
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: taskCompleteToolCall.toolCallId,
+        status: 'completed',
+      },
+    });
+
+    const ended = continuationEvents(emitted).filter((e) => (e.payload as any)?.phase === 'ended');
+    expect(ended).toHaveLength(1);
+    expect((backend as any).isAutonomousContinuationActive()).toBe(false);
+  });
+
+  it('keeps the continuation open across an ordinary provider pause between thought and prose', async () => {
+    // The provider stays silent while it reasons. With the shipped Copilot opt-in defaults the
+    // stall budget must not end the run before a deterministic terminal signal, otherwise the
+    // following prose crosses a segment boundary and can be lost.
+    const { backend, emitted } = createBackend({ providerAutonomousContinuation: {} });
+    completePromptTurn(backend);
+
+    await (backend as any).handleSessionUpdate({
+      sessionId: SESSION_ID,
+      update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } },
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await (backend as any).handleSessionUpdate({ sessionId: SESSION_ID, update: continuationText });
+
+    const started = continuationEvents(emitted).filter((e) => (e.payload as any)?.phase === 'started');
+    expect(started).toHaveLength(1);
+    expect(
+      emitted.some(
+        (msg) => msg.type === 'model-output'
+          && `${(msg as any).textDelta ?? ''}${(msg as any).fullText ?? ''}`.includes('PLAIN_CONTINUATION_PROSE'),
+      ),
+    ).toBe(true);
+  });
+
   it('accepts a plain assistant-prose autonomous continuation', async () => {
     const { backend, emitted } = createBackend();
     completePromptTurn(backend);

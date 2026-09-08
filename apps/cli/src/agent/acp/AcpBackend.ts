@@ -414,19 +414,24 @@ function isPromptTurnSessionUpdateType(sessionUpdateType: string | undefined): b
     || sessionUpdateType === 'plan';
 }
 
-/**
- * A completed `task_complete` tool call, which is how Copilot's autopilot mode reports that
- * an autonomous run has finished.
- */
-function isTerminalTaskCompleteUpdate(update: unknown): boolean {
-  const record = asRecord(update);
-  if (!record) return false;
-  const sessionUpdateType = typeof record.sessionUpdate === 'string' ? record.sessionUpdate : '';
+/** The `tool_call`/`tool_call_update` identifier, when the update carries one. */
+function readToolCallId(update: Record<string, unknown>): string | null {
+  const raw = update.toolCallId;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+/** Whether an update announces a `task_complete` tool call, regardless of its status. */
+function isTaskCompleteToolCallAnnouncement(update: Record<string, unknown>): boolean {
+  const sessionUpdateType = typeof update.sessionUpdate === 'string' ? update.sessionUpdate : '';
   if (sessionUpdateType !== 'tool_call' && sessionUpdateType !== 'tool_call_update') return false;
-  if (record.status !== 'completed' && record.status !== 'failed') return false;
-  const title = typeof record.title === 'string' ? record.title : '';
-  const toolName = typeof record.toolName === 'string' ? record.toolName : '';
+  const title = typeof update.title === 'string' ? update.title : '';
+  const toolName = typeof update.toolName === 'string' ? update.toolName : '';
   return title === 'task_complete' || toolName === 'task_complete';
+}
+
+/** Whether a tool-call update reports a terminal status. */
+function isTerminalToolCallStatus(update: Record<string, unknown>): boolean {
+  return update.status === 'completed' || update.status === 'failed';
 }
 
 function getString(obj: Record<string, unknown>, key: string): string | null {
@@ -767,7 +772,7 @@ export type AcpProviderAutonomousContinuationOptions = Readonly<{
 }>;
 
 const DEFAULT_AUTONOMOUS_CONTINUATIONS_PER_TURN = 8;
-const DEFAULT_AUTONOMOUS_CONTINUATION_STALL_MS = 2000;
+const DEFAULT_AUTONOMOUS_CONTINUATION_STALL_MS = 30_000;
 
 export type AcpSteerDeliveryIdentity = Readonly<{
   localId?: string | null;
@@ -902,6 +907,12 @@ export class AcpBackend implements AgentBackend {
   private autonomousContinuationArmedGeneration: number | null = null;
   private autonomousContinuationRemaining = 0;
   private autonomousContinuationId: string | null = null;
+  /**
+   * `task_complete` tool-call identifiers seen during the open continuation. Copilot sends the
+   * tool name on `tool_call` and the terminal status on a later status-only `tool_call_update`,
+   * so the terminal signal can only be recognized by correlating the identifier.
+   */
+  private autonomousContinuationTaskCompleteCallIds = new Set<string>();
   private autonomousContinuationGeneration: number | null = null;
   private autonomousContinuationStallTimeout: NodeJS.Timeout | null = null;
 
@@ -2412,7 +2423,7 @@ export class AcpBackend implements AgentBackend {
     // Copilot's autopilot run terminates with a completed `task_complete` tool call. Closing
     // on that explicit provider signal keeps the busy state accurate without waiting for the
     // inactivity budget.
-    if (this.isAutonomousContinuationActive() && normalizedUpdates.some(isTerminalTaskCompleteUpdate)) {
+    if (this.isAutonomousContinuationActive() && this.observeAutonomousContinuationTerminalSignal(normalizedUpdates)) {
       this.endAutonomousContinuation('task_complete');
     }
   }
@@ -2880,6 +2891,7 @@ export class AcpBackend implements AgentBackend {
     this.dispatchedPromptTurnGeneration = turnGeneration;
     this.autonomousContinuationGeneration = turnGeneration;
     this.autonomousContinuationId = continuationId;
+    this.autonomousContinuationTaskCompleteCallIds.clear();
     this.autonomousContinuationArmedGeneration = null;
     this.autonomousContinuationRemaining -= 1;
     this.pendingTurnOutcome = null;
@@ -2903,9 +2915,12 @@ export class AcpBackend implements AgentBackend {
   /**
    * Restart the inactivity budget that closes an open continuation.
    *
-   * ACP v1 has no continuation-end notification, so a silent provider is the only
-   * observable end of an autonomous run that never calls `task_complete`. Output is already
-   * projected before this fires, so it bounds the busy state without gating delivery.
+   * ACP v1 has no continuation-end notification, so a silent provider is the only observable
+   * end of an autonomous run that never reports `task_complete`. This is a safety cap that
+   * bounds the busy state, not proof that the provider finished: the deterministic close is
+   * the correlated terminal `task_complete` tool call, and the budget is deliberately far
+   * longer than an ordinary provider pause between reasoning and prose. Output is always
+   * projected before this can fire, so it never gates or drops delivery.
    */
   private bumpAutonomousContinuationStall(): void {
     const limits = this.resolveAutonomousContinuationLimits();
@@ -2924,6 +2939,28 @@ export class AcpBackend implements AgentBackend {
     this.autonomousContinuationStallTimeout.unref?.();
   }
 
+  /**
+   * Record `task_complete` tool-call identities seen during the open continuation and report
+   * whether this batch carried the provider's terminal completion for one of them.
+   */
+  private observeAutonomousContinuationTerminalSignal(updates: readonly unknown[]): boolean {
+    let terminal = false;
+    for (const update of updates) {
+      const record = asRecord(update);
+      if (!record) continue;
+      const toolCallId = readToolCallId(record);
+      if (isTaskCompleteToolCallAnnouncement(record) && toolCallId) {
+        this.autonomousContinuationTaskCompleteCallIds.add(toolCallId);
+      }
+      if (!isTerminalToolCallStatus(record)) continue;
+      if (isTaskCompleteToolCallAnnouncement(record)
+        || (toolCallId !== null && this.autonomousContinuationTaskCompleteCallIds.has(toolCallId))) {
+        terminal = true;
+      }
+    }
+    return terminal;
+  }
+
   /** Close an open continuation generation and hand the session back to the client. */
   private endAutonomousContinuation(reason: string): void {
     const continuationId = this.autonomousContinuationId;
@@ -2936,6 +2973,7 @@ export class AcpBackend implements AgentBackend {
     }
     this.autonomousContinuationGeneration = null;
     this.autonomousContinuationId = null;
+    this.autonomousContinuationTaskCompleteCallIds.clear();
 
     if (generation === this.turnGeneration) {
       this.plans.finalizeTurn(resolveAcpPlanTurnId(generation));
@@ -3727,6 +3765,14 @@ export class AcpBackend implements AgentBackend {
       this.postIdleWithoutAssistantMessageTimeout = null;
     }
     this.clearResponseCompletionTimeout();
+    // A provider-autonomous continuation owns its own generation and its own end signal. These
+    // idle budgets exist to bound a *client* prompt turn, whose completion was already published
+    // before the continuation opened. Closing the generation here would silently drop the
+    // provider output that arrives after an ordinary reasoning pause.
+    if (this.isAutonomousContinuationActive()) {
+      logger.debug('[AcpBackend] Deferring idle finalization to the open provider-autonomous continuation');
+      return;
+    }
     this.emit({ type: 'status', status: 'idle' });
     this.clearActiveToolCallStateForTerminalTurn('idle finalization');
     this.closeCurrentTurnGeneration();
