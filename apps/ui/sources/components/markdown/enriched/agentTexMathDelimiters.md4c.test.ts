@@ -4,6 +4,7 @@ import { parseMarkdown } from '../../../../node_modules/react-native-enriched-ma
 import type { Md4cFlags } from '../../../../node_modules/react-native-enriched-markdown/src/types/MarkdownStyle';
 import type { ASTNode } from '../../../../node_modules/react-native-enriched-markdown/src/web/types';
 import { extractNodeText } from '../../../../node_modules/react-native-enriched-markdown/src/web/utils';
+import { normalizeOpaqueCitationMarkers } from '../normalizeOpaqueCitationMarkers';
 
 type BackslashTexMathFlags = Md4cFlags & Readonly<{ texMathBackslashDelimiters: boolean }>;
 
@@ -118,5 +119,21 @@ describe('agent-style TeX delimiters in the enriched Markdown parser', () => {
             { type: 'LatexMathInline', content: 'x' },
         ]);
         expect(collectMath(await parseAgentTex(markdown, false))).toEqual([]);
+    });
+
+    it('renders normalized opaque citations as literal text without creating math or masked links', async () => {
+        const markdown = normalizeOpaqueCitationMarkers(
+            'Text citeturn0view0(https://example.com)',
+        );
+        const ast = await parseAgentTex(markdown);
+
+        expect(markdown).toBe('Text 〔1〕(https://example.com)');
+        expect(extractNodeText(ast)).toContain('Text 〔1〕');
+        expect(collectMath(ast)).toEqual([]);
+        expect(
+            collectNodes(ast)
+                .filter((node) => node.type === 'Link')
+                .map((node) => extractNodeText(node)),
+        ).not.toContain('1');
     });
 });

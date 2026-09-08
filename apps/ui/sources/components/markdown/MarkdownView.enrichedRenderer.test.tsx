@@ -64,6 +64,39 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(enrichedRuns[0]!.props.streamingAnimation).toBeUndefined();
     });
 
+    it('renders opaque provider citation markers as stable numeric references when requested', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const markdown = 'First citeturn0view0 then citeturn0search1turn0view0.';
+
+        const screen = await renderScreen(
+            React.createElement(MarkdownView as any, {
+                markdown,
+                selectable: true,
+                profile: 'transcript',
+                opaqueCitationDisplay: 'numeric',
+            }),
+        );
+
+        const enrichedRun = screen.findByType('EnrichedMarkdownText');
+        expect(enrichedRun.props.markdown).toBe('First 〔1〕 then 〔1, 2〕.');
+    });
+
+    it('hides a trailing incomplete opaque citation marker while streaming', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+
+        const screen = await renderScreen(
+            React.createElement(MarkdownView as any, {
+                markdown: 'Visible **text ci',
+                selectable: true,
+                profile: 'transcript',
+                streamingMode: 'streaming',
+                opaqueCitationDisplay: 'numeric',
+            }),
+        );
+
+        expect(screen.findByType('EnrichedMarkdownText').props.markdown).toBe('Visible **text**');
+    });
+
     it('enables agent TeX parsing without rewriting the Markdown source', async () => {
         const { MarkdownView } = await import('./MarkdownView');
         const markdown = 'Coordinates: [\\(x\\), \\(y\\)]';

@@ -2574,8 +2574,10 @@ export function createAcpRuntime(params: {
     },
 
     async flushTurn(): Promise<void> {
+      let taskCompleteSummaryForDurableFallback: string | null = null;
       if (!turnAborted && !accumulatedResponse.trim() && taskCompleteSummaryFallback) {
         const summary = taskCompleteSummaryFallback;
+        taskCompleteSummaryForDurableFallback = summary;
         handleAcpModelOutputDelta({
           delta: summary,
           messageBuffer: params.messageBuffer,
@@ -2598,11 +2600,24 @@ export function createAcpRuntime(params: {
       const attachedSessionMediaToAssistantRow = sessionMediaMeta
         ? streamedTranscriptWriter.mergeAssistantMeta(sessionMediaMeta)
         : false;
-      await streamedTranscriptWriter.flushAll(
+      const transcriptFlushSummary = await streamedTranscriptWriter.flushAll(
         turnAborted
           ? { reason: 'abort', interruptedReason: 'turn-aborted' }
           : { reason: 'turn-end' },
       );
+      if (
+        taskCompleteSummaryForDurableFallback
+        && !transcriptFlushSummary.assistantRoot.didDurablyFlush
+      ) {
+        const assistantRootSegment = transcriptFlushSummary.segments.find(
+          (segment) => segment.kind === 'assistant' && segment.sidechainId === null && segment.sawText,
+        );
+        await params.session.sendAgentMessageCommitted(
+          params.provider,
+          { type: 'message', message: taskCompleteSummaryForDurableFallback },
+          { localId: assistantRootSegment?.localId ?? randomUUID() },
+        );
+      }
       await abortPendingAcpPermissionRequests(
         params.permissionHandler,
         turnAborted ? 'ACP runtime turn aborted' : 'ACP runtime turn ended',

@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { AgentTextMessage } from '@/sync/domains/messages/messageTypes';
+import type { AgentTextMessage, UserTextMessage } from '@/sync/domains/messages/messageTypes';
 import type {
     TranscriptForkCommon,
     TranscriptMessageDisplayCommon,
@@ -68,7 +68,9 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: React.PropsWithChildren<Record<string, unknown>>) =>
         React.createElement('Text', props, props.children),
 }));
-vi.mock('@/components/tools/shell/views/ToolView', () => ({ ToolView: () => React.createElement('ToolView') }));
+vi.mock('@/components/tools/shell/views/ToolView', () => ({
+    ToolView: (props: Record<string, unknown>) => React.createElement('ToolView', props),
+}));
 vi.mock('@/components/tools/shell/views/ToolTimelineRow', () => ({
     ToolTimelineRow: () => React.createElement('ToolTimelineRow'),
 }));
@@ -126,7 +128,17 @@ const streamingMeta = {
     },
 } satisfies AgentTextMessage['meta'];
 
-function createAgentMessage(text: string): AgentTextMessage {
+const completeMeta = {
+    happierStreamSegmentV1: {
+        ...streamingMeta.happierStreamSegmentV1,
+        segmentState: 'complete',
+    },
+} satisfies AgentTextMessage['meta'];
+
+function createAgentMessage(
+    text: string,
+    meta: AgentTextMessage['meta'] = streamingMeta,
+): AgentTextMessage {
     return {
         kind: 'agent-text',
         id: 'm1',
@@ -134,7 +146,17 @@ function createAgentMessage(text: string): AgentTextMessage {
         createdAt: 1,
         text,
         isThinking: false,
-        meta: streamingMeta,
+        meta,
+    };
+}
+
+function createUserMessage(text: string): UserTextMessage {
+    return {
+        kind: 'user-text',
+        id: 'u1',
+        localId: 'local-u1',
+        createdAt: 1,
+        text,
     };
 }
 
@@ -226,5 +248,72 @@ describe('MessageView native streaming Markdown render', () => {
         expect(screen.findByType('EnrichedMarkdownText').props.streamingAnimation).toBe(true);
         expect(screen.findAllByTestId('markdown-static-render-content')).toHaveLength(1);
         expect(screen.findByTestId('transcript-streaming-plain:m1')).toBe(null);
+    });
+
+    it('normalizes opaque citation markers in completed assistant messages', async () => {
+        const { MessageViewWithSessionCommon } = await import('./MessageView');
+        const screen = await renderScreen(
+            <MessageViewWithSessionCommon
+                sessionId="s1"
+                metadata={null}
+                message={createAgentMessage(
+                    'Answer citeturn0view0turn0view2.',
+                    completeMeta,
+                )}
+                messageDisplayCommon={messageDisplayCommon}
+                forkCommon={forkCommon}
+                toolChromeCommon={toolChromeCommon}
+                toolRouteCommon={toolRouteCommon}
+                interaction={{ canSendMessages: true, canApprovePermissions: true }}
+            />,
+        );
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(screen.findByType('EnrichedMarkdownText').props.markdown).toBe('Answer 〔1, 2〕.');
+    });
+
+    it('normalizes opaque citation markers quoted in user transcript messages', async () => {
+        const { MessageViewWithSessionCommon } = await import('./MessageView');
+        const screen = await renderScreen(
+            <MessageViewWithSessionCommon
+                sessionId="s1"
+                metadata={null}
+                message={createUserMessage('What is citeturn0view0?')}
+                messageDisplayCommon={messageDisplayCommon}
+                forkCommon={forkCommon}
+                toolChromeCommon={toolChromeCommon}
+                toolRouteCommon={toolRouteCommon}
+                interaction={{ canSendMessages: true, canApprovePermissions: true }}
+            />,
+        );
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(screen.findByType('EnrichedMarkdownText').props.markdown).toBe('What is 〔1〕?');
+    });
+
+    it('normalizes citations in thinking summaries and tool-card content', async () => {
+        const { MessageViewWithSessionCommon } = await import('./MessageView');
+        const thinkingMessage = {
+            ...createAgentMessage('Thought citeturn0view0', completeMeta),
+            isThinking: true,
+        } satisfies AgentTextMessage;
+        const screen = await renderScreen(
+            <MessageViewWithSessionCommon
+                sessionId="s1"
+                metadata={null}
+                message={thinkingMessage}
+                messageDisplayCommon={{
+                    ...messageDisplayCommon,
+                    sessionThinkingDisplayMode: 'tool',
+                }}
+                forkCommon={forkCommon}
+                toolChromeCommon={toolChromeCommon}
+                toolRouteCommon={toolRouteCommon}
+                interaction={{ canSendMessages: true, canApprovePermissions: true }}
+            />,
+        );
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(screen.findByType('ToolView').props.tool.result.content).toBe('Thought 〔1〕');
     });
 });
