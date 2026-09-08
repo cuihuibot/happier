@@ -647,6 +647,40 @@ Desktop rollback bundle:
 /Users/cuihui/Applications/Happier-pre-final-citation-20260908T1335.app
 ```
 
+### Autopilot continuation fix — test deployment
+
+The continuation-ownership work is validated on the Quinann test machine only.
+The candidate is installed as that machine's default CLI; no other host was
+changed.
+
+| Item | Value |
+| --- | --- |
+| Version label | `0.2.11-cuihui-autopilot-continuation-366ac45a-v9` |
+| Source commit | `93e8abd9e57abcd4c291a3b986b30909f44737d8` |
+| Native `happier` SHA-256 | `5c4f7777ba8b9fd6ac4cff9958e68b3d1a00ce092f5342a8edc40e18acc42557` |
+| Tarball SHA-256 | `617c80419ceed575b53495f6aad9467fdecd5a3fa287e17a1d24245feba0d823` |
+| Install path | `~/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v9` |
+
+Install and activate:
+
+```bash
+ln -sfn ~/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v9 \
+  ~/.happier/cli/current
+launchctl kickstart -k gui/$(id -u)/com.happier.cli.daemon.default
+happier daemon status   # must report the expected CLI Version
+```
+
+Roll back by pointing `current` at any retained version and kickstarting the
+same service. Retained rollback targets, newest first:
+`…-v8`, `…-v7`, `…-v6`, `…-v5`, and the original
+`0.2.11-cuihui-task-complete-v3`.
+
+Compatibility: the change is confined to the ACP backend, its runtime and the
+prompt loop. It alters cancellation behavior only for providers that enable the
+autonomous continuation capability, so no stored transcript, session record or
+provider other than Copilot is affected, and rolling back needs no data
+migration.
+
 ## Synchronizing with upstream
 
 After merging `upstream/dev`, rerun all tests listed above. Remove a
