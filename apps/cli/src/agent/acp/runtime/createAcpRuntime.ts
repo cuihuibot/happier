@@ -11,6 +11,7 @@ import {
   type AcpRetiredProviderSession,
   type SessionConfigOption,
 } from '@/agent/acp/AcpBackend';
+import type { RunnerAbortIntent } from '@/agent/runtime/runnerAbortIntent';
 import type { AcpTurnOutcome } from '@/agent/acp/backend/turn/_types';
 import type { MessageBuffer } from '@/ui/ink/messageBuffer';
 import {
@@ -333,7 +334,7 @@ export type AcpRuntime = Readonly<{
    * caller takes ownership of runtime turn state.
    */
   settleAutonomousContinuation: () => Promise<void>;
-  cancel: () => Promise<void>;
+  cancel: (options?: Readonly<{ intent?: RunnerAbortIntent }>) => Promise<void>;
   reset: () => Promise<void>;
   startOrLoad: (opts: { resumeId?: string | null; importHistory?: boolean; deferPendingDrain?: boolean }) => Promise<string>;
   /**
@@ -2487,7 +2488,7 @@ export function createAcpRuntime(params: {
       }
     },
 
-    async cancel(): Promise<void> {
+    async cancel(options?: Readonly<{ intent?: RunnerAbortIntent }>): Promise<void> {
       if (!sessionId) return;
       if (turnInFlight) {
         turnAborted = true;
@@ -2495,7 +2496,7 @@ export function createAcpRuntime(params: {
       await streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'cancelled' });
       const b = await ensureBackend();
       try {
-        await b.cancel(sessionId);
+        await b.cancel(sessionId, options);
       } finally {
         await abortPendingAcpPermissionRequests(params.permissionHandler, 'ACP runtime cancelled', (error) => {
           logger.debug(`[${params.provider}] Failed to abort pending permission requests after cancel`, error);

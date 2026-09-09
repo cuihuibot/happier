@@ -15,6 +15,7 @@
 import type { AgentId as CatalogAgentId } from '@happier-dev/agents';
 import type { AgentMessageHandler, SessionId } from './AgentMessage';
 import type { AgentPromptPayload } from './AgentPromptPayload';
+import type { RunnerAbortIntent } from '@/agent/runtime/runnerAbortIntent';
 
 export type { AgentMessage, AgentMessageHandler, SessionId, ToolCallId } from './AgentMessage';
 
@@ -165,8 +166,12 @@ export interface AgentBackend {
    * Cancel the current operation in a session.
    * 
    * @param sessionId - The session to cancel
+   * @param options.intent - Why the cancellation happened. Backends that can permanently abandon
+   *   provider-side work need this to tell an explicit user cancellation apart from a process
+   *   shutdown, which must leave the session resumable. Defaults to the conservative
+   *   `shutdown` interpretation, so a backend that ignores it keeps its previous behaviour.
    */
-  cancel(sessionId: SessionId): Promise<void>;
+  cancel(sessionId: SessionId, options?: Readonly<{ intent?: RunnerAbortIntent }>): Promise<void>;
   
   /**
    * Register a handler for agent messages.
