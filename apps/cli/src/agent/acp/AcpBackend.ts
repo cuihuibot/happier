@@ -25,6 +25,10 @@ import {
   type ContentBlock,
 } from '@agentclientprotocol/sdk';
 import { redactBugReportSensitiveText } from '@happier-dev/protocol';
+import {
+  DEFAULT_RUNNER_ABORT_INTENT,
+  type RunnerAbortIntent,
+} from '@/agent/runtime/runnerAbortIntent';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, promises as fs } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -4104,27 +4108,21 @@ export class AcpBackend implements AgentBackend {
     return modeId.endsWith('#autopilot');
   }
 
-  /**
-   * True when cancelling abandons provider work that is **observably running right now**.
-   *
-   * This is deliberately narrower than `cancellationLeavesUncancellableProviderWork()`. That
-   * predicate also treats a merely *armed* continuation as uncancellable, which is correct for
-   * retiring the connection but must not drive the durable half of retirement: a session that
-   * completed its turn and is then simply stopped is armed and idle, and durably poisoning its
-   * resume id would destroy a healthy session's provider context for no observed reason. Only
-   * an opened continuation or an unresolved request is evidence that the provider is still
-   * working on something the cancellation is abandoning.
-   */
-  private cancellationAbandonsRunningProviderWork(): boolean {
-    if (!this.resolveAutonomousContinuationLimits()) return false;
-    if (this.autonomousContinuationGeneration !== null) return true;
-    return this.activePromptRpc !== null || this.waitingForResponse;
-  }
-
-  async cancel(sessionId: SessionId): Promise<void> {
+  async cancel(
+    sessionId: SessionId,
+    options?: Readonly<{ intent?: RunnerAbortIntent }>,
+  ): Promise<void> {
+    const intent: RunnerAbortIntent = options?.intent ?? DEFAULT_RUNNER_ABORT_INTENT;
     this.promptCompletionSettlement = null;
     const mustRetireConnection = this.cancellationLeavesUncancellableProviderWork();
-    const mustRetireDurably = mustRetireConnection && this.cancellationAbandonsRunningProviderWork();
+    // Durability follows the caller's intent, not a guess about provider activity. Only an
+    // explicit cancellation abandons the provider session for good; a shutdown stops this turn
+    // but must leave the session resumable, even when work was genuinely in flight.
+    //
+    // Inferring intent from activity was wrong in both directions: it discarded the resume id of
+    // every normally stopped session that merely had a continuation armed, and it could not
+    // retire an armed-but-unopened continuation that the user really did cancel.
+    const mustRetireDurably = mustRetireConnection && intent === 'explicit-cancel';
     this.disarmAutonomousContinuation('cancelled by user', 'cancelled');
     if (this.waitingForResponse) {
       this.failPendingResponseWait(makeAbortError('Cancelled by user'));

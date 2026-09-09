@@ -124,7 +124,7 @@ describe('retired provider session durability', () => {
     await Promise.resolve();
     armUncancellableAutonomousWork(h.backend);
 
-    await h.backend.cancel(SESSION_ID as never);
+    await h.backend.cancel(SESSION_ID as never, { intent: 'explicit-cancel' });
 
     expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBeUndefined();
     // The rest of the session record is untouched: history and identity are not the hazard.
@@ -137,7 +137,7 @@ describe('retired provider session durability', () => {
     await Promise.resolve();
     armUncancellableAutonomousWork(h.backend);
 
-    await h.backend.cancel(SESSION_ID as never);
+    await h.backend.cancel(SESSION_ID as never, { intent: 'explicit-cancel' });
 
     const notice = h.events.find((e) => (e as { type?: string }).type === 'message') as
       { message?: string } | undefined;
@@ -151,7 +151,7 @@ describe('retired provider session durability', () => {
     await Promise.resolve();
     armUncancellableAutonomousWork(h.backend);
 
-    await h.backend.cancel(SESSION_ID as never);
+    await h.backend.cancel(SESSION_ID as never, { intent: 'explicit-cancel' });
 
     const last = h.statuses.at(-1);
     expect(last?.status).toBe('error');
@@ -166,7 +166,7 @@ describe('retired provider session durability', () => {
     internals.sessionModeState = { currentModeId: 'default' };
     internals.waitingForResponse = true;
 
-    await h.backend.cancel(SESSION_ID as never);
+    await h.backend.cancel(SESSION_ID as never, { intent: 'explicit-cancel' });
 
     expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBe(SESSION_ID);
     expect(h.events.some((e) => (e as { type?: string }).type === 'message')).toBe(false);
@@ -177,9 +177,9 @@ describe('retired provider session durability', () => {
     await Promise.resolve();
     armUncancellableAutonomousWork(h.backend);
 
-    await h.backend.cancel(SESSION_ID as never);
+    await h.backend.cancel(SESSION_ID as never, { intent: 'explicit-cancel' });
     const noticesAfterFirst = h.events.length;
-    await h.backend.cancel(SESSION_ID as never);
+    await h.backend.cancel(SESSION_ID as never, { intent: 'explicit-cancel' });
 
     expect(h.events.length).toBe(noticesAfterFirst);
   });
@@ -195,7 +195,7 @@ describe('retired provider session durability', () => {
    * the retirement notice on stop and respawned with `hasResume:false`, while the identical
    * v9 control respawned with `--resume`.
    */
-  it('does not durably retire an armed-but-idle session, which is what a normal stop looks like', async () => {
+  it('does not durably retire an armed-but-idle session that is merely shutting down', async () => {
     const h = createHarness();
     await Promise.resolve();
     const internals = h.backend as unknown as Record<string, unknown>;
@@ -207,13 +207,15 @@ describe('retired provider session durability', () => {
     internals.waitingForResponse = false;
     internals.activePromptRpc = null;
 
-    await h.backend.cancel(SESSION_ID as never);
+    await h.backend.cancel(SESSION_ID as never, { intent: 'shutdown' });
 
     expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBe(SESSION_ID);
     expect(h.events.some((e) => (e as { type?: string }).type === 'message')).toBe(false);
   });
 
-  it('still durably retires when the request is unresolved, i.e. the provider is mid-turn', async () => {
+  // The conservative default protects every caller that has not been taught the distinction,
+  // including other providers: an unspecified intent must never destroy a resume pointer.
+  it('treats an unspecified intent as a shutdown', async () => {
     const h = createHarness();
     await Promise.resolve();
     const internals = h.backend as unknown as Record<string, unknown>;
@@ -225,6 +227,62 @@ describe('retired provider session durability', () => {
 
     await h.backend.cancel(SESSION_ID as never);
 
+    expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBe(SESSION_ID);
+  });
+
+  /**
+   * The gap round 6 could not close by inferring intent from provider activity. A user who
+   * cancels while a continuation is armed but not yet opened has abandoned the work, even though
+   * nothing is observably running at that instant: the provider may open the continuation moments
+   * later, and a resume would hand the abandoned goal straight back.
+   */
+  it('durably retires an armed-but-unopened session when the user explicitly cancels', async () => {
+    const h = createHarness();
+    await Promise.resolve();
+    const internals = h.backend as unknown as Record<string, unknown>;
+    internals.sessionModeState = {
+      currentModeId: 'https://agentclientprotocol.com/protocol/session-modes#autopilot',
+    };
+    internals.autonomousContinuationArmedGeneration = 1;
+    internals.waitingForResponse = false;
+    internals.activePromptRpc = null;
+
+    await h.backend.cancel(SESSION_ID as never, { intent: 'explicit-cancel' });
+
     expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBeUndefined();
+    expect(h.events.some((e) => (e as { type?: string }).type === 'message')).toBe(true);
+  });
+
+  it('durably retires an explicit cancellation while the request is unresolved', async () => {
+    const h = createHarness();
+    await Promise.resolve();
+    const internals = h.backend as unknown as Record<string, unknown>;
+    internals.sessionModeState = {
+      currentModeId: 'https://agentclientprotocol.com/protocol/session-modes#autopilot',
+    };
+    internals.autonomousContinuationArmedGeneration = 1;
+    internals.waitingForResponse = true;
+
+    await h.backend.cancel(SESSION_ID as never, { intent: 'explicit-cancel' });
+
+    expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBeUndefined();
+  });
+
+  // Requirement: interrupted ongoing work that is only being shut down stays resumable.
+  it('keeps interrupted in-flight work resumable when the runner is shutting down', async () => {
+    const h = createHarness();
+    await Promise.resolve();
+    const internals = h.backend as unknown as Record<string, unknown>;
+    internals.sessionModeState = {
+      currentModeId: 'https://agentclientprotocol.com/protocol/session-modes#autopilot',
+    };
+    internals.autonomousContinuationArmedGeneration = 1;
+    internals.autonomousContinuationGeneration = 1;
+    internals.waitingForResponse = true;
+
+    await h.backend.cancel(SESSION_ID as never, { intent: 'shutdown' });
+
+    expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBe(SESSION_ID);
+    expect(h.events.some((e) => (e as { type?: string }).type === 'message')).toBe(false);
   });
 });
