@@ -4104,9 +4104,27 @@ export class AcpBackend implements AgentBackend {
     return modeId.endsWith('#autopilot');
   }
 
+  /**
+   * True when cancelling abandons provider work that is **observably running right now**.
+   *
+   * This is deliberately narrower than `cancellationLeavesUncancellableProviderWork()`. That
+   * predicate also treats a merely *armed* continuation as uncancellable, which is correct for
+   * retiring the connection but must not drive the durable half of retirement: a session that
+   * completed its turn and is then simply stopped is armed and idle, and durably poisoning its
+   * resume id would destroy a healthy session's provider context for no observed reason. Only
+   * an opened continuation or an unresolved request is evidence that the provider is still
+   * working on something the cancellation is abandoning.
+   */
+  private cancellationAbandonsRunningProviderWork(): boolean {
+    if (!this.resolveAutonomousContinuationLimits()) return false;
+    if (this.autonomousContinuationGeneration !== null) return true;
+    return this.activePromptRpc !== null || this.waitingForResponse;
+  }
+
   async cancel(sessionId: SessionId): Promise<void> {
     this.promptCompletionSettlement = null;
     const mustRetireConnection = this.cancellationLeavesUncancellableProviderWork();
+    const mustRetireDurably = mustRetireConnection && this.cancellationAbandonsRunningProviderWork();
     this.disarmAutonomousContinuation('cancelled by user', 'cancelled');
     if (this.waitingForResponse) {
       this.failPendingResponseWait(makeAbortError('Cancelled by user'));
@@ -4155,7 +4173,7 @@ export class AcpBackend implements AgentBackend {
       // cancellation does not actually hold until that projection is gone. This is awaited
       // before the stop is announced: announcing a completed cancellation while a resumable
       // pointer to the cancelled work survives would announce a state that does not exist.
-      if (this.providerSessionRetirementHandler && retiredVendorSessionId) {
+      if (this.providerSessionRetirementHandler && retiredVendorSessionId && mustRetireDurably) {
         try {
           await this.providerSessionRetirementHandler({
             vendorSessionId: retiredVendorSessionId,

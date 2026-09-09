@@ -113,7 +113,8 @@ function armUncancellableAutonomousWork(backend: AcpBackend): void {
   internals.sessionModeState = {
     currentModeId: 'https://agentclientprotocol.com/protocol/session-modes#autopilot',
   };
-  internals.autonomousContinuationOpen = true;
+  // An opened continuation: autonomous output is arriving right now.
+  internals.autonomousContinuationGeneration = 1;
   internals.waitingForResponse = true;
 }
 
@@ -181,5 +182,49 @@ describe('retired provider session durability', () => {
     await h.backend.cancel(SESSION_ID as never);
 
     expect(h.events.length).toBe(noticesAfterFirst);
+  });
+
+  /**
+   * Regression for a defect this repair originally introduced. `session stop` cancels the
+   * backend even when the session is idle, and a completed autopilot turn leaves a
+   * continuation *armed*. Treating that as a retirement durably cleared the resume id of a
+   * perfectly healthy session, so every stopped Copilot session lost its provider context.
+   *
+   * Observed live on native v10: sessions `cmttehs3600bdnphtaleuzlol` (autopilot) and
+   * `cmtsylqqd0m37npp8kuy6zhhj` (ordinary) were never cancelled by a user, yet both received
+   * the retirement notice on stop and respawned with `hasResume:false`, while the identical
+   * v9 control respawned with `--resume`.
+   */
+  it('does not durably retire an armed-but-idle session, which is what a normal stop looks like', async () => {
+    const h = createHarness();
+    await Promise.resolve();
+    const internals = h.backend as unknown as Record<string, unknown>;
+    internals.sessionModeState = {
+      currentModeId: 'https://agentclientprotocol.com/protocol/session-modes#autopilot',
+    };
+    // A completed turn: the request has settled and no continuation has opened.
+    internals.autonomousContinuationArmedGeneration = 1;
+    internals.waitingForResponse = false;
+    internals.activePromptRpc = null;
+
+    await h.backend.cancel(SESSION_ID as never);
+
+    expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBe(SESSION_ID);
+    expect(h.events.some((e) => (e as { type?: string }).type === 'message')).toBe(false);
+  });
+
+  it('still durably retires when the request is unresolved, i.e. the provider is mid-turn', async () => {
+    const h = createHarness();
+    await Promise.resolve();
+    const internals = h.backend as unknown as Record<string, unknown>;
+    internals.sessionModeState = {
+      currentModeId: 'https://agentclientprotocol.com/protocol/session-modes#autopilot',
+    };
+    internals.autonomousContinuationArmedGeneration = 1;
+    internals.waitingForResponse = true;
+
+    await h.backend.cancel(SESSION_ID as never);
+
+    expect((h.getMetadata() as Record<string, unknown>).copilotSessionId).toBeUndefined();
   });
 });
