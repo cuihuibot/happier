@@ -36,6 +36,9 @@ export const KNOWN_CANONICAL_TOOL_NAMES_V2 = [
   'AcpHistoryImport',
   'WorkspaceIndexingPermission',
   'change_title',
+  // Provider-agnostic turn-completion event. Copilot (and other ACP providers) publish the
+  // final turn summary as a tool call; it is a distinct card, not a `change_title` row.
+  'task_complete',
   'SubAgentRun',
   // Agent teams / swarm orchestration events (provider-agnostic).
   'AgentTeamCreate',

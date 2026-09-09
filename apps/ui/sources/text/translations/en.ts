@@ -6539,6 +6539,7 @@ export const en = {
             switchMode: 'Switch mode',
             taskOutput: 'Task output',
             taskStop: 'Stop task',
+            taskComplete: 'Task complete',
         },
         geminiExecute: {
             cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,

@@ -450,6 +450,14 @@ export const ChangeTitleResultV2Schema = BaseEnvelopeSchema.extend({
   title: z.string().optional(),
 }).passthrough();
 
+export const TaskCompleteInputV2Schema = BaseEnvelopeSchema.extend({
+  summary: z.string().optional(),
+}).passthrough();
+
+export const TaskCompleteResultV2Schema = BaseEnvelopeSchema.extend({
+  summary: z.string().optional(),
+}).passthrough();
+
 const TOOL_INPUT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
   Bash: BashInputV2Schema,
   Read: ReadInputV2Schema,
@@ -479,6 +487,7 @@ const TOOL_INPUT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
   AcpHistoryImport: AcpHistoryImportInputV2Schema,
   WorkspaceIndexingPermission: WorkspaceIndexingPermissionInputV2Schema,
   change_title: ChangeTitleInputV2Schema,
+  task_complete: TaskCompleteInputV2Schema,
   SubAgentRun: SubAgentRunInputV2Schema,
   AgentTeamCreate: AgentTeamCreateInputV2Schema,
   AgentTeamDelete: AgentTeamDeleteInputV2Schema,
@@ -514,6 +523,7 @@ const TOOL_RESULT_SCHEMAS: Record<KnownCanonicalToolNameV2, z.ZodTypeAny> = {
   AcpHistoryImport: BaseEnvelopeSchema.passthrough(),
   WorkspaceIndexingPermission: BaseEnvelopeSchema.passthrough(),
   change_title: ChangeTitleResultV2Schema,
+  task_complete: TaskCompleteResultV2Schema,
   SubAgentRun: SubAgentRunResultV2Schema,
   AgentTeamCreate: AgentTeamCreateResultV2Schema,
   AgentTeamDelete: AgentTeamDeleteResultV2Schema,

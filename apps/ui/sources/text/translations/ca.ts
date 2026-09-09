@@ -6530,6 +6530,7 @@ deps: {
             switchMode: 'Canvia el mode',
             taskOutput: 'Sortida de la tasca',
             taskStop: 'Atura la tasca',
+            taskComplete: 'Tasca completada',
         },
         geminiExecute: {
             cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,

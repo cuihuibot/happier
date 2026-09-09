@@ -1071,12 +1071,17 @@ export function registerMachineRpcHandlers(params: Readonly<{
     return await receipt;
   };
 
-  rpcHandlerManager.registerHandler(
-    RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE,
-    handleTrackedSpawnHappySession,
-  );
-  rpcHandlerManager.registerHandler(RPC_METHODS.SPAWN_HAPPY_SESSION, async (params: any) => {
-    const result = await handleTrackedSpawnHappySession(params);
+  /**
+   * Settle an accept-then-async spawn for a caller that cannot follow the nonce.
+   * Correlation is this exact launch's own nonce carried on its own acceptance
+   * envelope — never the newest session, directory, timestamp or current child —
+   * and it never re-spawns. A launch whose identity does not settle inside the
+   * bounded resolve deadline returns the canonical explicit failure instead of a
+   * second pending success.
+   */
+  const settleAcceptedSpawnIdentity = async (
+    result: Awaited<ReturnType<typeof handleSpawnHappySession>>,
+  ) => {
     if (result.type !== 'success' || result.sessionId) {
       return result;
     }
@@ -1086,9 +1091,37 @@ export function registerMachineRpcHandlers(params: Readonly<{
     });
     if (settled.type === 'success') {
       logger.debug(`[API MACHINE] Spawned session ${settled.sessionId}`);
-      return { type: 'success' as const, sessionId: settled.sessionId };
+      return {
+        type: 'success' as const,
+        sessionId: settled.sessionId,
+        ...(typeof result.pendingFirstInputAccepted === 'boolean'
+          ? { pendingFirstInputAccepted: result.pendingFirstInputAccepted }
+          : {}),
+      };
     }
     return settled;
+  };
+
+  rpcHandlerManager.registerHandler(
+    RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE,
+    async (params: unknown) => {
+      const result = await handleTrackedSpawnHappySession(params);
+      const record = params && typeof params === 'object' && !Array.isArray(params)
+        ? params as Readonly<Record<string, unknown>>
+        : null;
+      // Released clients that predate caller-supplied spawn nonces mint a nonce
+      // locally, drop it from this payload, and then poll that never-submitted
+      // nonce forever. Their launch really did start, so this daemon answers them
+      // with the direct success + sessionId shape they already accept. A caller
+      // that did submit a nonce keeps the modern asynchronous acceptance.
+      if (readNonBlankOpaqueIdentifier(record?.spawnNonce)) {
+        return result;
+      }
+      return await settleAcceptedSpawnIdentity(result);
+    },
+  );
+  rpcHandlerManager.registerHandler(RPC_METHODS.SPAWN_HAPPY_SESSION, async (params: any) => {
+    return await settleAcceptedSpawnIdentity(await handleTrackedSpawnHappySession(params));
   });
 
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE, async (params: unknown) => {

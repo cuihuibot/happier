@@ -2,6 +2,18 @@
 
 This document describes the Happier CLI (`apps/cli`) and its daemon. The CLI is both an interactive tool and a background session manager that keeps machine state in sync with the server.
 
+Closure update, September 9, 2026: the user reports that original-phone New
+Session seems to work; this is not wire-level verification. The separate card
+review was user-deferred at `08:43+07:00` and remains unverified. See the [closure and recovery
+status](cuihui-customizations.md#september-9-closure-and-recovery-status) for
+the exact evidence boundary and now-absent historical workspace paths.
+All 26 source files are recovered byte-identically and durably integrated on
+`exp/spawn-compat-and-completion-card-recovery-r1` at base
+`0d99e21273200b3a43d9508d6878234895f0240a`, without a source integration delta.
+The [durable integration identity](cuihui-customizations.md#durable-integration-identity)
+binds the source manifest and new paths. Fresh product approval, exact-repository
+documentation approval and publication remain pending; production is untouched.
+
 ## System overview
 
 ```mermaid
@@ -327,6 +339,95 @@ Sessions can be started by:
 - Remote requests over RPC (from mobile/web via machine connection).
 
 Daemon session spawning uses `registerCommonHandlers` to expose a controlled RPC surface (shell commands, file operations, search/diff helpers).
+
+### Accepted spawn identity: local compatibility experiment
+
+Record ID: `DSC-ARCH-01`. Original applicability: the uncommitted
+`exp/daemon-spawn-compat-r1` candidate on base
+`0d99e21273200b3a43d9508d6878234895f0240a`, experimentally deployed CLI version
+`0.2.11-cuihui-spawn-compat-r1`. Activation completed September 8, 2026 at
+`16:47:32Z`, with daemon-only restart at `16:46:52Z`. This is not a released
+support promise or proof of phone acceptance. See the [experiment record](cuihui-customizations.md#daemon-spawn-compatibility-experiment)
+and [mixed-client limits](compatibility.md#daemon-spawn-compatibility-experiment).
+The same source bytes now form the daemon portion of the combined durable
+candidate identified above; this does not extend the historical review scope.
+
+The machine RPC adapter in `apps/cli/src/api/machine/rpcHandlers.ts` calls
+`handleTrackedSpawnHappySession` once per handler invocation. For
+`SPAWN_HAPPY_SESSION_PROVIDER_SAFE`, a caller-supplied `spawnNonce` that is a
+string with nonblank trimmed content retains the existing response, including
+modern accepted-but-pending success. The opaque identifier helper validates
+presence without rewriting its bytes.
+
+When that caller nonce is absent, non-string, empty, or whitespace-only, the
+provider-safe route uses `settleAcceptedSpawnIdentity`, also used by the
+legacy `SPAWN_HAPPY_SESSION` RPC. Existing errors, directory-approval responses,
+and successes already carrying `sessionId` pass through. For a pending success,
+the adapter delegates to `awaitSpawnedSessionId` in
+`apps/cli/src/session/services/awaitSpawnedSessionId.ts`. Resolution uses only
+the nonce on that accepted spawn's result, including a daemon-generated nonce.
+It does not guess from the newest session, directory, timestamp, or current
+child, and settlement does not spawn a second session.
+
+On settlement success the response is `{ type: 'success', sessionId }`,
+preserving `pendingFirstInputAccepted` if it was a boolean, including `false`.
+This preserves the custody signal; it does not assert that the first input was
+executed. Existing daemon admission/coalescing and retry behavior is unchanged:
+per-result identity correlation is not a guarantee that identical requests
+create distinct sessions or that nonce-less requests have caller-key idempotency.
+
+The existing helper defaults to a 90-second settlement budget and 250 ms polling.
+`HAPPIER_SPAWN_SESSION_ID_RESOLVE_TIMEOUT_MS` and
+`HAPPIER_SPAWN_SESSION_ID_RESOLVE_POLL_INTERVAL_MS` retain their existing bounds
+(100 ms to 10 minutes and 25 ms to 10 seconds, respectively); this experiment
+does not change those settings. Failure to resolve is not fabricated success:
+timeout returns `SESSION_WEBHOOK_TIMEOUT`, while missing resolution capability,
+untracked identity, and resolver errors retain the helper's explicit errors.
+The inspected old client still polls its own never-submitted nonce on that
+timeout, so the adapter does not solve every delayed-start case.
+
+Author regression cases in `apps/cli/src/api/machine/rpcHandlers.test.ts`
+cover generated-nonce direct identity with first-input acknowledgement,
+out-of-order mocked resolutions, bounded timeout, and an already-direct ID.
+Those author cases are not independent product evidence. Separately, the
+Independent Product Quality Engineer's exact R5 preactivation
+`quality_gate_pass` includes 12/12 compiled-branch tests with synthetic
+dependencies, including unchanged valid-nonce acceptance, direct-ID pass-through
+and boolean acknowledgement. It is readiness evidence, not live client success.
+The experiment record binds the source patch, full manifest, native/archive
+and R5 operator hashes, exact activation receipt, and separate live-review scope.
+
+Operator evidence records daemon `75201` replaced by `83830`. The Independent
+Product Quality Engineer's `quality-live/REPORT.txt`, closed at
+`2026-09-08T16:54:41.545070Z`, returned `quality_gate_pass` for
+**EXPERIMENTAL DEPLOYMENT AND PRESERVATION ONLY**; report SHA-256:
+`9268e1a8edc4c484f390fe305c329310c37feb91bc07cd13db843dc57a9ad03b`.
+It independently matched the full installed 57,376-entry tree and observed
+persistent daemon `83830` on the same machine and relay route, with all 14
+protected PID/start/executable identities retained and eight expected runner
+PPID changes diagnostic only. Main runner `81619`, Copilot child `82196`,
+relay `70892`, all eight prior version directories, the old v3 native binary,
+prior pointers and hosted R3 index were preserved; the frozen candidate was
+copied, not consumed. This does not claim full old-tree byte equivalence or an
+exercised reboot/restart-on-failure. Restart used `happier service restart`,
+not `happier daemon service restart`. No session was created or real rollback
+exercised. The exact pinned, diagnose-first recovery procedure belongs to the
+experiment record, not historical generic installation guidance. Those
+temporary workspace paths are now absent; scripts, receipt and payload must
+be recovered, verified and rebound before any separately authorized use.
+The recovered historical review bodies do not restore the underlying old test
+logs. Non-exact daemon rollout-helper reconstructions were discarded; the
+original receipt and a current executable recovery procedure have not been
+re-established. The historical pass is not evidence of current rollback readiness.
+
+At `2026-09-09T08:38+07:00`, the user reported original-phone New Session seems
+to work. Exact wire correlation and phone provenance remain unknown, and a
+separate modern nonce-bearing client's live outcome remains unverified. The
+scoped deployment pass proves neither nonce-less nor nonce-bearing live
+RPC/client acceptance, phone success, or documentation approval. Source/compiled
+synthetic branch coverage remains preactivation evidence, not proof of this
+request/response path executing for that phone. No new runtime test was run
+for this documentation update; fresh independent documentation review is pending.
 
 ### Machine state
 

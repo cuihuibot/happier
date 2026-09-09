@@ -7311,6 +7311,7 @@ export const it: TranslationStructure = {
       switchMode: "Cambia modalità",
       taskOutput: "Output dell’attività",
       taskStop: "Interrompi attività",
+      taskComplete: "Attività completata",
     },
     geminiExecute: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,

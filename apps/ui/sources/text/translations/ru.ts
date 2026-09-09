@@ -6938,6 +6938,7 @@ export const ru: TranslationStructure = {
       switchMode: "Сменить режим",
       taskOutput: "Вывод задачи",
       taskStop: "Остановить задачу",
+      taskComplete: "Задача завершена",
     },
     geminiExecute: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,

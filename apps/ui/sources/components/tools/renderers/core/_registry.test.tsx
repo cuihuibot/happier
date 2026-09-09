@@ -119,6 +119,12 @@ describe('toolViewRegistry', () => {
         expect(getToolViewComponent('AgentTeamSendMessage')).toBe(toolViewRegistry.AgentTeamSendMessage);
     });
 
+    it('maps the canonical completion tool to its dedicated view', async () => {
+        const [{ getToolViewComponent, toolViewRegistry }] = await Promise.all([import('./_registry')]);
+        expect(getToolViewComponent('task_complete')).toBe(toolViewRegistry.task_complete);
+        expect(getToolViewComponent('task_complete')).not.toBe(toolViewRegistry.change_title);
+    });
+
     it('uses the MCP tool renderer for any mcp__* tool name', async () => {
         const [{ getToolViewComponent }, { MCPToolView }] = await Promise.all([import('./_registry'), import('../system/MCPToolView')]);
         expect(getToolViewComponent('mcp__linear__create_issue')).toBe(MCPToolView);

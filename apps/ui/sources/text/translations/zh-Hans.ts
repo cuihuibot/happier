@@ -6726,6 +6726,7 @@ export const zhHans: TranslationStructure = {
       switchMode: "切换模式",
       taskOutput: "任务输出",
       taskStop: "停止任务",
+      taskComplete: "任务完成",
     },
     geminiExecute: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,

@@ -7237,6 +7237,7 @@ localTailscale: {
       switchMode: "モードを切り替え",
       taskOutput: "タスクの出力",
       taskStop: "タスクを停止",
+      taskComplete: "タスク完了",
     },
     geminiExecute: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
