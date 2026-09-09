@@ -492,35 +492,71 @@ Truthful limits of the durable retirement:
 - It guarantees the cancelled provider session is never resumed again. It still
   does not prove the provider process stopped computing.
 - Ordinary-mode cancellation keeps its resume projection, because ordinary-mode
-  work really does stop; this was verified as a live control in round 5, and
-  ordinary-mode resume after a normal stop was verified again live on v11.
-- A continuation that was armed but never opened, cancelled while the session is
-  otherwise idle, does **not** durably retire the provider session. If the
-  provider was in fact still working silently at that instant, a later resume
-  could still restore that work.
+  work really does stop. This is covered by regression, not by live evidence on
+  this machine: every live Copilot session here reports an autopilot session
+  mode, including one created explicitly with `--mode default`, so the
+  ordinary-mode branch is not reachable through the public CLI against this
+  provider build. That is a limit of the available live environment, not a claim
+  that the branch is inert.
+- An explicit cancellation of a continuation that is armed but not yet opened
+  **does** durably retire the provider session. Round 6 could not do this,
+  because it inferred intent from observable provider activity and there is none
+  at that instant. Round 7 removed the inference: see "Abort intent" below.
+- The metadata write is **server-acknowledged**, not best effort. Round 6
+  described it as best effort; that was too pessimistic and has been corrected.
+  `ApiSessionClient.updateMetadata` takes the metadata lock, waits for the
+  session socket to be online for an acknowledged write, and delegates to
+  `updateSessionMetadataWithAck`, which only resolves on an explicit
+  `result === 'success'` answer, retries a `version-mismatch` against a fresh
+  server snapshot, and otherwise throws a typed `SessionStateUpdateError`. A
+  failure therefore cannot be mistaken for a completed cancellation: it is
+  surfaced as the error status above instead of a clean stop.
 
-  This is an architectural limit of the current control surface, not an untried
-  option. The obvious alternative is to discriminate on caller intent — durably
-  retire on a user cancel, but not on a shutdown — and that information does not
-  exist at this boundary. Both `runtime.cancel()` call sites in
-  `runStandardAcpProvider.ts` are user-initiated (`cancelActiveTurn` and
-  `handleAbort`), and `AcpBackend.dispose()` deliberately does not route through
-  `cancel()` at all: it calls `connection.peer.cancel` directly. An ordinary
-  `happier session stop` is delivered as an abort and lands in that same
-  `handleAbort` path — verified on healthy v10 control session
-  `cmttehs3600bdnphtaleuzlol`, which was created, allowed to persist a turn, then
-  stopped and restarted as a resume control. The abort harness was never invoked
-  during that run, yet its persisted transcript still contains `turn_aborted`
-  rows. Stop and user-cancel are therefore
-  indistinguishable to the backend, so observed provider activity is the only
-  sound discriminator available. Adding a distinct shutdown intent would mean
-  changing the shared session-control protocol, which is outside this fix.
-  Round 6 v10 is the evidence for the alternative being unsafe: retiring on the
-  wider armed-only signal wiped the resume id of every normally stopped Copilot
-  session, and both directions are now pinned by regressions.
-- The metadata write is best-effort at the transport level: a write that is
-  accepted locally but lost server-side would not be detected here. A write that
-  fails outright is surfaced as the error status above.
+### Abort intent (why a cancellation happened)
+
+Every abort path in a runner converges on one `handleAbort` helper in
+`runStandardAcpProvider.ts`, which used to take no arguments. The reason for the
+abort was therefore thrown away before any backend could act on it. That single
+missing fact caused two opposite defects:
+
+- v10 durably retired the provider session of every normally stopped Copilot
+  session, because a stop looks exactly like a cancellation from inside the
+  backend.
+- v11 avoided that by inferring intent from observable provider activity, which
+  then could not retire a continuation that was armed but not yet opened — there
+  is nothing observably running at that instant, even though the user really did
+  cancel.
+
+Round 7 stops guessing. `RunnerAbortIntent` is `'explicit-cancel' | 'shutdown'`,
+and each registration site states its own intent:
+
+| Call site | Intent | Why |
+|---|---|---|
+| `rpcHandlerManager.registerHandler('abort', …)` | `explicit-cancel` | the user abandoned the work |
+| permission decision `abort` (`onAbortRequested`) | `explicit-cancel` | the user declined and abandoned the turn |
+| `cancelActiveTurn` (in-flight steer) | `explicit-cancel` | the user interrupted this turn to send another |
+| `registerRunnerTerminationHandlers` `onTerminate` | `shutdown` | signal, kill-session or crash |
+| terminal display `onExit` | `shutdown` | the UI closed; the work was not abandoned |
+
+Three properties make this safe:
+
+- **The intent is fixed at the registration site, never read from the request
+  payload.** A remote caller cannot claim to be a shutdown to avoid retirement,
+  or claim to be a cancellation to destroy someone's resume pointer.
+- **The default is `shutdown`**, the reading that never discards a resume
+  pointer. `AgentBackend.cancel`'s new parameter is optional, so every other
+  provider and every unconverted caller keeps its previous behaviour.
+- **De-duplication escalates instead of swallowing.** Aborts share one in-flight
+  promise. A cancellation arriving behind an in-flight shutdown is *stronger*, so
+  it runs a follow-up cancellation rather than returning the shutdown's promise.
+  The reverse (a shutdown behind a cancellation) is weaker and is still
+  de-duplicated.
+
+`happier session stop` reaches the runner as **SIGTERM**, not as the `abort` RPC,
+so it lands on `onTerminate` and is correctly a shutdown. This is what makes
+"normal stop stays resumable" and "explicit cancel retires" both achievable at
+the same time.
+
 
 ### Regression coverage
 
