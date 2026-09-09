@@ -1993,6 +1993,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         generateNewQrCode: '產生新的 QR 碼',
         pairingQrExpired: '此 QR 碼已過期。請產生新的 QR 碼。',
         accountUrlPlaceholder: 'happier:///account?...',
+        accountLinkKeyFamilyUnverifiedTitle: '無法驗證此帳戶的加密金鑰',
+        accountLinkKeyFamilyUnverifiedBody: '本裝置無法確認該帳戶使用哪個加密金鑰，因此停止操作，以免儲存錯誤的金鑰。請在已登入的裝置上開啟 設定 → 帳戶，確認同步完成後再次掃描。',
         restoreQrInstructions: '在已登入的裝置上前往 設定 → 帳戶 並掃描此 QR 碼。',
         externalAuthVerifiedTitle: ({ provider }: { provider: string }) => `${provider} 驗證完成`,
         externalAuthVerifiedBody: ({ provider }: { provider: string }) =>

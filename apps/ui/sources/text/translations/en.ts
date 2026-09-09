@@ -1239,6 +1239,8 @@ export const en = {
         openMachine: 'Open machine',
         terminalUrlPlaceholder: 'happier://terminal?...',
         accountUrlPlaceholder: 'happier:///account?...',
+        accountLinkKeyFamilyUnverifiedTitle: 'Can\'t verify this account\'s encryption key',
+        accountLinkKeyFamilyUnverifiedBody: 'This device couldn\'t confirm which encryption key this account uses, so it stopped instead of saving a key that might be wrong. Open Settings → Account on the device you\'re already signed in to, make sure it has finished syncing, then scan again.',
         restoreQrInstructions: "On a device that's already signed in, go to Settings → Account and scan this QR code.",
         externalAuthVerifiedTitle: ({ provider }: { provider: string }) => `${provider} verified`,
         externalAuthVerifiedBody: ({ provider }: { provider: string }) =>

@@ -1400,6 +1400,8 @@ export const pl: TranslationStructure = {
     openMachine: "Otwórz maszynę",
     terminalUrlPlaceholder: "happier://terminal?...",
     accountUrlPlaceholder: "happier:///account?...",
+    accountLinkKeyFamilyUnverifiedTitle: 'Nie można zweryfikować klucza szyfrowania tego konta',
+    accountLinkKeyFamilyUnverifiedBody: 'To urządzenie nie potwierdziło, którego klucza szyfrowania używa konto, więc przerwało zamiast zapisać potencjalnie błędny klucz. Otwórz Ustawienia → Konto na urządzeniu, na którym jesteś już zalogowany, poczekaj na zakończenie synchronizacji i zeskanuj ponownie.',
     restoreQrInstructions:
       "Na urządzeniu, na którym jesteś już zalogowany(-a), przejdź do Ustawienia → Konto i zeskanuj ten kod QR.",
     externalAuthVerifiedTitle: ({ provider }: { provider: string }) =>

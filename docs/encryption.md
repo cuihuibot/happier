@@ -644,12 +644,21 @@ Because the transfer channel cannot negotiate, the receiver disambiguates instea
   `SHA-512(deriveKey(secret, 'Happy EnCoder', ['content']))[0..32]` for a legacy master secret — so a
   successful secretbox authentication identifies the family cryptographically rather than by
   guessing.
-- Exactly one candidate opening the envelope resolves the family. A candidate that is rejected by
-  the account evidence, or evidence that is ambiguous, fails closed rather than persisting a
-  credential that would decrypt nothing.
-- When the account has no encrypted settings envelope to test against, the receiver keeps the
-  previously released legacy interpretation. There is nothing encrypted to misread in that state,
-  and refusing would break pairing that currently succeeds.
+- Exactly one candidate opening the envelope resolves the family. Any other outcome refuses: a
+  candidate rejected by the account evidence, ambiguous evidence, unreadable or malformed evidence,
+  and an account that exposes no readable encrypted settings envelope at all.
+- Absent evidence is a refusal, not a default. An account with no readable encrypted settings has
+  not thereby proven that it holds no encrypted machines, sessions, or other account-scoped records,
+  and it does not fix the family that later writes will be sealed under. Resolving that case to a
+  guessed family would recreate exactly the silent wrong-key divergence this check exists to
+  prevent.
+
+This is a deliberate compatibility limitation. An account that exposes no readable encrypted
+settings envelope cannot complete an account-link transfer through this path and must use a flow
+that establishes its key family directly. The receiving client refuses visibly, with an actionable
+message, and stores nothing: no credential is persisted, no writer is initialized, and no account
+state is mutated. Failing to link is recoverable by the user; persisting the wrong key is silent
+and is not.
 
 Storing the wrong family is not a recoverable mistake at rest: a content data key stored as a legacy
 master secret derives a different content key pair, so every account-scoped record — machine

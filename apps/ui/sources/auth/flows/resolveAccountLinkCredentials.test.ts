@@ -58,20 +58,50 @@ describe('resolveAccountLinkCredentials', () => {
         });
     });
 
-    it('preserves the released legacy interpretation when the account publishes no evidence', async () => {
-        const onUnverifiedFamily = vi.fn();
-        const credentials = await resolveAccountLinkCredentials({
+    it('refuses to store guessed legacy credentials when the account publishes no readable encrypted settings', async () => {
+        // A raw dataKey transfer whose account exposes no settings envelope. Other encrypted
+        // account-scoped material (machines, sessions) may still exist, so absence of settings is
+        // not proof of a legacy account and must never yield storable credentials.
+        await expect(resolveAccountLinkCredentials({
             token: 'transferred-token',
-            payload: legacySecretBytes,
+            payload: dataKeyBytes,
             fetchSettingsCiphertext: async () => null,
-            onUnverifiedFamily,
+        })).rejects.toMatchObject({
+            name: 'AccountLinkKeyFamilyError',
+            reason: 'account_evidence_absent',
         });
+    });
 
-        expect(credentials).toEqual({
+    it('refuses a blank or legacy account of unknown family rather than defaulting to legacy', async () => {
+        for (const ciphertext of [null, '', '   ']) {
+            await expect(resolveAccountLinkCredentials({
+                token: 'transferred-token',
+                payload: legacySecretBytes,
+                fetchSettingsCiphertext: async () => ciphertext,
+            })).rejects.toMatchObject({
+                name: 'AccountLinkKeyFamilyError',
+                reason: 'account_evidence_absent',
+            });
+        }
+    });
+
+    it('fails closed on malformed settings ciphertext', async () => {
+        await expect(resolveAccountLinkCredentials({
             token: 'transferred-token',
-            secret: encodeBase64(legacySecretBytes, 'base64url'),
+            payload: dataKeyBytes,
+            fetchSettingsCiphertext: async () => 'not-a-valid-envelope',
+        })).rejects.toMatchObject({
+            name: 'AccountLinkKeyFamilyError',
+            reason: 'key_rejected_by_account_evidence',
         });
-        expect(onUnverifiedFamily).toHaveBeenCalledExactlyOnceWith('account_evidence_absent');
+    });
+
+    it('exposes no option that could re-enable accepting an unproven family', () => {
+        // Guards the owner ruling: the resolver must not regain a callback or flag that lets a
+        // caller opt back into storing credentials for an unproven key family.
+        const source = resolveAccountLinkCredentials.toString();
+        expect(source).not.toContain('onUnverifiedFamily');
+        expect(resolveAccountLinkCredentials.length).toBe(1);
     });
 
     it('fails closed when the account evidence rejects the transferred key', async () => {

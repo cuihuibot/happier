@@ -1710,6 +1710,8 @@ export const it: TranslationStructure = {
     openMachine: "Apri macchina",
     terminalUrlPlaceholder: "happier://terminal?...",
     accountUrlPlaceholder: "happier:///account?...",
+    accountLinkKeyFamilyUnverifiedTitle: 'Impossibile verificare la chiave di crittografia di questo account',
+    accountLinkKeyFamilyUnverifiedBody: 'Questo dispositivo non ha potuto confermare quale chiave di crittografia usa l\'account, quindi si è fermato invece di salvare una chiave forse sbagliata. Apri Impostazioni → Account sul dispositivo in cui hai già effettuato l\'accesso, attendi il termine della sincronizzazione e scansiona di nuovo.',
     restoreQrInstructions:
       "Su un dispositivo dove hai già effettuato l’accesso, vai su Impostazioni → Account e scansiona questo codice QR.",
     externalAuthVerifiedTitle: ({ provider }: { provider: string }) =>

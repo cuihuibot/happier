@@ -1241,6 +1241,8 @@ export const fr: TranslationStructure = {
         openMachine: 'Ouvrir la machine',
         terminalUrlPlaceholder: 'happier://terminal?...',
         accountUrlPlaceholder: 'happier:///account?...',
+        accountLinkKeyFamilyUnverifiedTitle: 'Impossible de vérifier la clé de chiffrement de ce compte',
+        accountLinkKeyFamilyUnverifiedBody: 'Cet appareil n\'a pas pu confirmer quelle clé de chiffrement utilise ce compte, il s\'est donc arrêté plutôt que d\'enregistrer une clé peut-être erronée. Ouvre Réglages → Compte sur l\'appareil déjà connecté, attends la fin de la synchronisation, puis scanne à nouveau.',
         restoreQrInstructions: "Sur un appareil déjà connecté, va dans Réglages → Compte et scanne ce QR code.",
         externalAuthVerifiedTitle: ({ provider }: { provider: string }) => `${provider} vérifié`,
         externalAuthVerifiedBody: ({ provider }: { provider: string }) =>
