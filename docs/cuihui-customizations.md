@@ -519,42 +519,6 @@ Truthful limits:
   context and makes the next prompt pay a provider restart. That is the cost of
   the cancellation actually holding. Ordinary-mode cancellation is unchanged.
 
-### Corrected defect: a restated summary was published as a second answer
-
-A provider may answer in prose, end its turn, and then autonomously continue
-with a canonical `task_complete` whose summary **restates that same answer**.
-Because each autonomous continuation is projected as its own runtime turn,
-`beginTurn()` reset the per-turn accumulated response that both summary
-publication branches consult to decide whether the user has already seen the
-text. With that state cleared, the continuation's empty-response fallback
-treated the restatement as new output and published it as a second durable
-assistant row for one user prompt.
-
-The visible-answer decision is therefore scoped to the **dispatch** rather than
-the turn. A dispatch is one client prompt plus the provider-autonomous
-continuations that follow it: `beginTurn()` clears the delivered-answer set only
-when a client prompt opens a new dispatch, and a projected continuation inherits
-the answers its dispatch already delivered. `flushTurn()` skips the summary
-projection when the summary repeats one of them.
-
-The rules are:
-
-- **Cross-continuation idempotence.** A summary that repeats an answer already
-  delivered in the same dispatch yields exactly one durable assistant row, no
-  matter how many continuation turns separate the answer from the summary.
-- **Exact matching only.** Comparison is exact on the trimmed answer body, not a
-  substring scan, so a summary that merely mentions or quotes earlier text is
-  still published as its own answer.
-- **Separate user turns are preserved.** The set is per dispatch, so two
-  consecutive user prompts that legitimately produce the *same* answer text each
-  keep their own durable row.
-- **Tool activity is untouched.** Suppressing the duplicated answer projection
-  does not remove the `task_complete` tool call or its result from the
-  transcript; only the redundant assistant answer row is withheld.
-- The deterministic per-call-id row identity and the successful-completion,
-  failed-result, and already-visible-prose rules above are unchanged; this adds
-  the dispatch scope those rules were missing across continuations.
-
 ### Durable retirement (cancel → restart → prompt)
 
 An in-memory flag only protects the running session process. The retired
