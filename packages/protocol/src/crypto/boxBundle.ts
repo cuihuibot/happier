@@ -15,6 +15,13 @@ export function deriveBoxPublicKeyFromSeed(seed: Uint8Array): Uint8Array {
   return tweetnacl.box.keyPair.fromSecretKey(secretKey).publicKey;
 }
 
+export function deriveBoxPublicKeyFromSecretKey(secretKey: Uint8Array): Uint8Array {
+  if (secretKey.length !== tweetnacl.box.secretKeyLength) {
+    throw new Error(`Invalid box secret key length: ${secretKey.length}`);
+  }
+  return tweetnacl.box.keyPair.fromSecretKey(secretKey).publicKey;
+}
+
 export function sealBoxBundle(params: {
   plaintext: Uint8Array;
   recipientPublicKey: Uint8Array;
