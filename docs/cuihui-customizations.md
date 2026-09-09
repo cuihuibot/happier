@@ -1475,6 +1475,15 @@ this deployment. Rolling back restores nonce-less spawn compatibility and gives
 up the merged continuation behavior. `previous` and
 `previous-before-task-complete-fix` were not modified.
 
+Use the recipe above, not a product-initiated rollback. `current` was switched
+by hand rather than through `promoteVersionedPayload`, so the generic
+`previous` marker that `rollbackVersionedPayload` consumes still points at
+`0.2.11-local-final2`. A product-initiated rollback would therefore land on
+that much older build and silently drop the nonce-less spawn compatibility.
+`previous` is deliberately left unchanged, exactly as the previous Cuihui
+activation left it; `previous-before-continuation-366ac45a` is the correct
+target for this rollout.
+
 ### Developer smoke evidence only
 
 On the deployed candidate, through the real relay machine RPC route: a
