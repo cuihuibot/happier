@@ -463,6 +463,18 @@ The retirement is therefore also durable:
   empty `effectiveResume`, so no `--resume` argument is produced. That path was
   observed live: a session whose resume id had never been published respawned
   with `hasResume:false` and did not resurrect its cancelled plan.
+- Durable retirement additionally requires evidence that the provider is working
+  on something the cancellation abandons: an **opened** continuation, or an
+  unresolved request. Connection retirement and the in-memory poison keep the
+  wider trigger that also covers a merely *armed* continuation.
+
+  This split is not cosmetic. `session stop` cancels the backend even when the
+  session is idle, and a completed autopilot turn leaves a continuation armed, so
+  using the wide trigger for the durable half made every normally stopped Copilot
+  session clear its own resume id and post a cancellation notice it had never
+  earned. That was observed live on native v10 for both an autopilot and an
+  ordinary session, and fixed in v11, where the same controls respawn with
+  `--resume` again and receive no notice.
 - Opaque provider identifiers are not written to logs or to the user-visible
   notice.
 
@@ -480,7 +492,14 @@ Truthful limits of the durable retirement:
 - It guarantees the cancelled provider session is never resumed again. It still
   does not prove the provider process stopped computing.
 - Ordinary-mode cancellation keeps its resume projection, because ordinary-mode
-  work really does stop; this was verified as a live control in round 5.
+  work really does stop; this was verified as a live control in round 5, and
+  ordinary-mode resume after a normal stop was verified again live on v11.
+- A continuation that was armed but never opened, cancelled while the session is
+  otherwise idle, does **not** durably retire the provider session. There is no
+  observed autonomous work to abandon at that point, and treating it as a
+  cancellation would break every normal session stop. If the provider was in fact
+  still working silently at that instant, a later resume could still restore that
+  work; this is a known, bounded gap, not a guarantee.
 - The metadata write is best-effort at the transport level: a write that is
   accepted locally but lost server-side would not be detected here. A write that
   fails outright is surfaced as the error status above.
@@ -710,16 +729,20 @@ changed.
 
 | Item | Value |
 | --- | --- |
-| Version label | `0.2.11-cuihui-autopilot-continuation-366ac45a-v9` |
-| Source commit | `93e8abd9e57abcd4c291a3b986b30909f44737d8` |
-| Native `happier` SHA-256 | `5c4f7777ba8b9fd6ac4cff9958e68b3d1a00ce092f5342a8edc40e18acc42557` |
-| Tarball SHA-256 | `617c80419ceed575b53495f6aad9467fdecd5a3fa287e17a1d24245feba0d823` |
-| Install path | `~/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v9` |
+| Version label | `0.2.11-cuihui-autopilot-continuation-366ac45a-v11` |
+| Source commit | `426fa0b343` (round-6 durable retirement, plus this record) |
+| Native `happier` SHA-256 | `32908caa228d2f7cc7cc25bbd020b8bf8ef7ccc775600467031a6a3e3435b9ed` |
+| Tarball SHA-256 | `4b1b10b8f636db3410464ee17a72b3fc66fb1f5537d2c55aac8dd51e0f25ad3b` |
+| Install path | `~/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v11` |
+
+`…-v10` carried the durable retirement but retired far too widely, clearing the
+resume id of every normally stopped Copilot session. Do not roll back to v10;
+use v9 or earlier.
 
 Install and activate:
 
 ```bash
-ln -sfn ~/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v9 \
+ln -sfn ~/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v11 \
   ~/.happier/cli/current
 launchctl kickstart -k gui/$(id -u)/com.happier.cli.daemon.default
 happier daemon status   # must report the expected CLI Version
@@ -727,14 +750,16 @@ happier daemon status   # must report the expected CLI Version
 
 Roll back by pointing `current` at any retained version and kickstarting the
 same service. Retained rollback targets, newest first:
-`…-v8`, `…-v7`, `…-v6`, `…-v5`, and the original
+`…-v9`, `…-v8`, `…-v7`, `…-v6`, `…-v5`, and the original
 `0.2.11-cuihui-task-complete-v3`.
 
-Compatibility: the change is confined to the ACP backend, its runtime and the
-prompt loop. It alters cancellation behavior only for providers that enable the
-autonomous continuation capability, so no stored transcript, session record or
-provider other than Copilot is affected, and rolling back needs no data
-migration.
+Compatibility: the change is confined to the ACP backend, its runtime, the
+prompt loop and the vendor resume id publisher. It alters cancellation behavior
+only for providers that enable the autonomous continuation capability. The
+durable retirement removes one metadata field (`copilotSessionId`) for a
+cancelled session only, so no stored transcript, session record or provider
+other than Copilot is affected, and rolling back needs no data migration: an
+already-cleared field simply means the next turn opens a fresh provider session.
 
 ## Synchronizing with upstream
 
