@@ -5810,6 +5810,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             switchMode: '切換模式',
             taskOutput: '任務輸出',
             taskStop: '停止任務',
+            taskComplete: '任務完成',
         },
         geminiExecute: {
             cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,

@@ -2,6 +2,24 @@
 
 This document defines when Happier preserves old behavior across UI, CLI, daemon, server, installers, and persisted state. The goal is safe upgrades and mixed-version operation without turning undeployed implementation history into permanent compatibility debt.
 
+Closure update, September 9, 2026: original-phone New Session seems to work
+according to the user; exact wire correlation and a separate modern
+nonce-bearing live probe remain unverified. Manual completion-card review is
+user-deferred, not a pass or failure. The [closure and recovery
+status](cuihui-customizations.md#september-9-closure-and-recovery-status) records
+the recovered documentation and gaps at the now-absent historical workspaces.
+All 26 source files are now recovered byte-identically and durably integrated on
+`exp/spawn-compat-and-completion-card-recovery-r1`, base
+`0d99e21273200b3a43d9508d6878234895f0240a`, without a source integration delta.
+The [durable integration identity](cuihui-customizations.md#durable-integration-identity)
+binds exact source inventories and new paths. Production is untouched; fresh
+product approval, exact-repository documentation approval and publication remain
+pending. Recovered historical review bodies do not restore the underlying old
+test logs. The non-exact daemon rollout-helper reconstructions were discarded;
+the original receipt and a current executable recovery procedure have not been
+re-established. Source integration does not establish current rollback readiness.
+This update changes no compatibility requirement or runtime behavior.
+
 ## Trigger
 
 Apply this policy when a change affects a cross-component wire shape or semantic, persisted/session/settings data, schema or migration, feature/capability negotiation, installer or service state, upgrade/coexistence, or rollback. Routine internal refactors that leave these seams unchanged do not need a compatibility matrix or shim.
@@ -108,6 +126,106 @@ Every retained compatibility path records:
 - its removal condition.
 
 Remove the path when its support window has ended and evidence shows no supported reader, writer, or stored shape still requires it. Do not remove a released-data reader merely because current writers stopped producing that shape.
+
+### Daemon-spawn compatibility experiment
+
+Record ID: `DSC-COMPAT-01`. This bounded local experiment was activated on
+September 8, 2026 (`16:45:30Z`-`16:47:32Z`), with daemon-only restart at
+`16:46:52Z`. It is not a new support window, client floor, relay protocol
+revision, or guarantee of successful phone behavior.
+The original exact source scope is base `0d99e21273200b3a43d9508d6878234895f0240a`
+plus the original uncommitted machine RPC handler/test change on
+`exp/daemon-spawn-compat-r1`. The [experiment record](cuihui-customizations.md#daemon-spawn-compatibility-experiment)
+owns rollout status; [CLI architecture](cli-architecture.md#accepted-spawn-identity-local-compatibility-experiment)
+describes the settlement adapter. The same source bytes are now integrated
+as the daemon portion of the combined durable candidate above; historical
+review scope remains unchanged.
+
+The running CLI identity deliberately remains
+`0.2.11-cuihui-spawn-compat-r1`, a custom/parser-unfriendly version. Do not
+substitute a parser-friendly version or update client payloads to make this
+experiment appear successful. The inspected pre-fix client source at
+`c11d059fa09332dc85a87ac512256e789d3b55f3` builds a local attempt nonce, but its
+legacy payload builder drops that nonce when selecting the legacy shape.
+It still tries `SPAWN_HAPPY_SESSION_PROVIDER_SAFE` before falling back to the
+legacy method only on method-unavailable/not-found errors. Its
+`apps/ui/sources/sync/ops/machines.ts` accepts direct success with `sessionId`;
+on pending success or `SESSION_WEBHOOK_TIMEOUT`, it resolves using its own
+locally retained nonce, not the daemon-generated nonce returned on acceptance.
+The existing source at `ac0fe7965f946a0e38c2075f8eb7fe1a3cfedc7f` already
+preserves the nonce in the legacy payload builder; that earlier UI fix does
+not prove the unidentified phone is running those bytes.
+
+| Reachable direction | Requirement and intended behavior | Evidence boundary |
+| --- | --- | --- |
+| Nonce-omitting legacy client to deployed experimental daemon, provider-safe RPC | Required: settle the exact accepted result nonce and return actual `sessionId` on successful settlement; no newest-session/directory guess and no settlement-triggered second spawn. | R5 independent compiled-branch coverage passes with synthetic dependencies; user reports original-phone New Session seems to work on September 9 at `08:38+07:00`, but exact wire correlation remains unverified. |
+| Nonblank string caller nonce to deployed experimental daemon, provider-safe RPC | Required: retain the modern response, including accepted-but-pending success; caller can resolve its submitted nonce. | R5 independent unchanged-branch coverage passes; modern nonce-bearing client live outcome pending. |
+| Absent, non-string, empty, or whitespace-only caller nonce to deployed experimental daemon | Required: use the same settlement adapter as legacy RPC; invalid nonce presence alone must not select modern pending behavior. | R5 independent compiled malformed/blank-input coverage passes; not live phone evidence. |
+| Legacy RPC to deployed experimental daemon | Required: retain direct settlement via the shared helper and preserve a boolean `pendingFirstInputAccepted`, including `false`. | R5 independent compiled/regression evidence; live first-input/error outcomes pending. |
+| Existing clients to restored `0.2.11-cuihui-task-complete-v3` daemon | Required rollback direction: preserve the old payload and pointer/marker state; nonce-less provider-safe failure may recur when the adapter is removed. | Historical R5 independently reviewed fixture recovery; actual deployment retained old state. No real rollback executed. Current script/receipt/payload availability and path rebinding remain unverified; the old workspace commands are not currently usable. Any separately authorized recovery still requires both exact pins and diagnose-first routing in the experiment record. |
+| Client/relay protocol migration or new native phone build | Unreachable as an action in this experiment: neither client nor relay is being replaced. Existing client-to-daemon requests still traverse the unchanged relay. | No protocol or native-app currency claim. |
+
+The adapter delegates to `awaitSpawnedSessionId` and the existing nonce
+settlement primitive; it does not own a parallel identity lookup or admission
+policy. Preserve `pendingFirstInputAccepted` on direct settlement so the client
+does not lose the existing custody signal. Acknowledgement does not prove
+first-turn execution.
+
+The daemon settlement default remains 90 seconds, with existing environment
+bounds. The inspected client's spawn RPC default is five minutes, separately
+bounded by its existing timeout reader; neither default is a startup SLO.
+On daemon `SESSION_WEBHOOK_TIMEOUT`, the inspected old client still polls its
+own unknown nonce. Slow or failed identity settlement can therefore retain
+the original failure even if a session exists. Transport/retry behavior and
+semantic request coalescing are unchanged. No guarantee is made that two
+identical nonce-less requests always create different sessions or that they
+provide caller-key idempotency. Mocked out-of-order resolver coverage proves
+neither real daemon admission behavior nor phone acceptance. In particular,
+"no caller-key deduplication" must not be restated as a guarantee that every
+retry creates a distinct session.
+
+The reported September 8 `20:13:11 +07:00` legacy request omitted a nonce,
+created a real session, and was followed by fruitless old-client polling.
+This is assignment-supplied operational evidence, not a phone-artifact
+identification or cache diagnosis. Native-versus-hosted identity and cache
+attribution remain unproven. The active hosted R3 completion-card rendering
+contract and its scoped independent live result remain unchanged; the
+original authenticated new-session outcome is now user-reported: at
+`2026-09-09T08:38+07:00`, the user said New Session on the original phone seems
+to work. This does not identify the exact wire path or client build. At
+`08:43+07:00`, the user deferred manual card review; it remains unverified,
+not failed. No further phone/card test is claimed here. Deployment created no new sessions
+and did not clear phone cache, replace the native app, or change relay/UI bytes.
+
+Independent preactivation helper failures R1-R4 were repaired; the exact R5
+readiness `quality_gate_pass` is historical. It includes synthetic compiled-branch
+and guarded operational recovery evidence, not live client compatibility.
+Actual operator evidence records daemon `75201` replaced by `83830`. The
+Independent Product Quality Engineer's `quality-live/REPORT.txt`, closed at
+`2026-09-08T16:54:41.545070Z`, returned `quality_gate_pass` for
+**EXPERIMENTAL DEPLOYMENT AND PRESERVATION ONLY**; report SHA-256:
+`9268e1a8edc4c484f390fe305c329310c37feb91bc07cd13db843dc57a9ad03b`.
+It independently matched the full installed 57,376-entry tree, observed
+persistent daemon `83830` on the same machine and relay route, and verified
+all 14 protected PID/start/executable identities, all eight prior version
+directories plus the new ninth, unchanged prior pointers, old v3 native binary
+and hosted R3 index, and an unconsumed frozen candidate. Eight runner PPID
+changes are diagnostic only. Full old-tree byte equivalence and an exercised
+reboot/restart-on-failure are not claimed.
+The [experiment record](cuihui-customizations.md#daemon-spawn-compatibility-experiment)
+binds exact source/native/operator/receipt identities and separately attributes
+the live deployment/preservation review. Neither readiness nor deployment
+preservation proves nonce-less or nonce-bearing live RPC/client acceptance,
+phone success, or documentation approval. The user-reported phone outcome
+does not verify the live wire-level rows above; source/compiled synthetic
+evidence remains preactivation-only. The recovered historical reports do not
+approve this updated three-document candidate; fresh independent review is pending.
+
+This prospective coexistence adapter has no invented expiration date.
+Retirement requires a separate owner decision supported by evidence that
+nonce-omitting callers are no longer required in the bounded deployment, or
+that an independently validated replacement covers them. This experiment
+does not establish a permanent released-client obligation.
 
 ### Account-pool quota-reset opt-in (development)
 

@@ -97,4 +97,6 @@ export {
   WorkspaceIndexingPermissionInputV2Schema,
   ChangeTitleInputV2Schema,
   ChangeTitleResultV2Schema,
+  TaskCompleteInputV2Schema,
+  TaskCompleteResultV2Schema,
 } from './schemas.js';

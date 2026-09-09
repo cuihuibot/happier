@@ -3,7 +3,97 @@
 This document is the source of truth for behavior intentionally maintained on
 `custom/cuihui` outside `happier-dev/happier`.
 
-Last verified: September 8, 2026.
+Technical evidence checkpoint: September 8, 2026.
+Closure status updated: September 9, 2026 (user report; no new runtime test).
+
+Repository-integrated documentation candidate, not published. Earlier records below are retained
+as history. For the R3 hosted completion-card activation and its scoped recovery,
+use [Hosted completion-card rendering: R3](#hosted-completion-card-rendering-r3);
+the earlier CLI restart and v2 rollback instructions do not apply to R3 recovery.
+The [daemon-spawn compatibility experiment](#daemon-spawn-compatibility-experiment)
+is separately deployed experimentally; the user now reports that the original
+phone's New Session seems to work, without wire-level verification. Its
+daemon-only activation left the hosted R3 UI unchanged. Historical CLI
+installation guidance below is not this experiment's operating procedure.
+
+## September 9 closure and recovery status
+
+Record ID: `DSC-CLOSURE-20260909`. At `2026-09-09T08:38+07:00`, the user
+reported that New Session on the original phone seems to work. This is the
+actual user-reported outcome, not an independently observed request/result
+trace. Exact wire correlation, phone native-versus-hosted identity, and a
+separate modern nonce-bearing live probe remain unverified.
+
+At `2026-09-09T08:43+07:00`, the user explicitly deferred manual review of the
+`task_complete` card and asked to assume it works and finish the remaining
+consolidation. That is a deferred, **unverified** check, not a pass or failure.
+The explicit bridge `task_complete` attempt at that time returned
+`unknown_tool` and produced no card event; this does not prove Copilot native
+completion was removed. No new card test or card-rendering outcome is claimed.
+The deployed hosted R3 repair remains conditional on an existing stored summary;
+separate CLI tool-mislabel and final-assistant-bubble gaps are outside this
+closure update, not newly delivered features.
+
+PA reports that both old temporary workspaces, including their `/private/tmp`
+aliases, are absent. The cause and any deletion actor are unproven. Old paths
+below are historical locators, not currently usable evidence or recovery
+commands. The three original DSC-DOC-R3 documents, their author handoff, and
+the exact historical documentation and daemon deployment/preservation reports
+have been hash-verified and recovered under `recovered-baseline/` in
+`/Users/cuihuiai/Work/happier-session-closure-20260909/documentation`;
+`recovery-inventory.json` records provenance and hashes. Historical reports
+retain only their original scope and do not approve these updated bytes.
+The historical review bodies are recovered, but their underlying old test,
+typecheck, build and browser log bodies are not. PSWE recovered some exact
+host-specific helpers for reference only; the non-exact daemon rollout-helper
+reconstructions were discarded. The original daemon receipt and a current
+executable recovery procedure have **not** been re-established. Source recovery
+does not recover the old payload/archive or establish current rollback
+readiness. Old commands below remain historical, not runnable recovery guidance.
+
+PA's approved integration update and PSWE's recovery handoff establish that
+all 26 source files are now recovered byte-identically and durably integrated
+as an uncommitted working-tree candidate. There is no overlapping source
+integration delta between the original UI base and the integration base, or
+between the two source changes. The combination still needs fresh independent
+product approval; recovered historical reviews do not approve it.
+
+### Durable integration identity
+
+Record ID: `DSC-INTEGRATION-20260909-R1`. Durable root:
+`/Users/cuihuiai/Work/happier-session-closure-20260909`.
+Paths in this table are relative to that root, not the absent temporary roots.
+
+| Identity or evidence | Current durable binding |
+| --- | --- |
+| Repository / branch | `repo/`, `exp/spawn-compat-and-completion-card-recovery-r1` |
+| Integration base / HEAD / locally recorded `origin/custom/cuihui` | `0d99e21273200b3a43d9508d6878234895f0240a` |
+| Source scope | Exactly 26 files: two daemon handler/test files and 24 hosted UI/shared-protocol files; 22 modified and four added |
+| Frozen combined source patch | `evidence/implementation/candidate/combined-candidate.patch`, SHA-256 `bb875094ea96fb16f2dbb3f8075ed3cc675fd347a1dd2541a1f11de820573287` |
+| Exact 26-path list | `evidence/implementation/candidate/changed-files.txt`, SHA-256 `7b42536a93b780d038461277348feabf2858a1bd3496a373c8fd81a73729237f` |
+| Per-source-file byte identities | `evidence/implementation/candidate/file-inventory.txt`, SHA-256 `1749ef20c02744a933bc9094a7a41c848aafda804020124b9a5c11a366fe655c` |
+| Source candidate manifest | `evidence/implementation/candidate/sha256-manifest.txt` |
+| Recovered original source | `recovery-source/daemon-r1/`, `recovery-source/ui-r3/` |
+| Exact original-base patches | `recovery-source/original-base-patches/`; daemon diff `07d3fb50e68030e7a6cd48bf3552297771fb1d8954c978bd3f81ed8dc9806e6e`, UI patch `6a9fe25a0ceb84e81e48110f206b9c8feaf381170a9fda7a413756c3c044f136` |
+| Recovery provenance / implementation handoff | `evidence/implementation/RECOVERY-INVENTORY.md`, `evidence/implementation/PSWE-HANDOFF.md` |
+| Official documentation candidate | `repo/docs/cuihui-customizations.md`, `repo/docs/cli-architecture.md`, `repo/docs/compatibility.md` |
+| Exact documentation handoff / preserved closure predecessor | `documentation/integrated-author-handoff.txt`, `documentation/preserved-closure-20260909-r1/` |
+
+The existing repository baseline and recovered historical records are retained.
+The original daemon and hosted source bases in the historical sections below
+remain provenance, not the new combined branch identity. The three repository
+documents require fresh independent review on their **exact repository bytes**.
+Separate fresh source validation is in progress per PA's assignment; this
+authoring checkpoint neither consumes nor predicts its result. Fresh product
+and documentation approval and publication remain pending.
+
+PA reports the installed daemon/native and hosted UI hashes unchanged; PSWE's
+read-only recovery observations match those identities. Production is untouched
+by this integration, and this author performed no host or runtime action.
+The user requests preservation, consolidation and publication of the fixes,
+not an assumed merge, release or redeployment. No commit, push or PR for this
+candidate has been created at this checkpoint. No overall compatibility approval
+or current rollback-ready claim follows from repository integration.
 
 ## Customization inventory
 
@@ -820,6 +910,479 @@ is reported as an error rather than a clean stop. No stored transcript or
 session record is removed, no provider other than Copilot is affected, and
 rolling back needs no data migration: an already-cleared field simply means the
 next turn opens a fresh provider session.
+## Hosted UI rollout: September 8, 2026
+
+The hosted web bundle carrying the Desktop tracking-ID fix was activated at
+`2026-09-08T10:31:19Z` (`17:31:19+07:00`). This is a scoped hosted deployment
+record, not a completed release or end-to-end acceptance claim. Independent
+final assessment, authenticated session creation, and user manual phone
+acceptance remain pending. The CLI/Desktop deployment record above is historical
+and unchanged; this rollout did not install a new CLI or native app.
+
+### Behavior and exact deployed candidate
+
+Source `ac0fe7965f946a0e38c2075f8eb7fe1a3cfedc7f` preserves caller-owned
+`spawnNonce` in the legacy UI spawn payload used with custom daemon versions.
+The running CLI remains `0.2.11-cuihui-task-complete-v3`. The hosted candidate
+combines that core export with additive old hashed assets and compression
+sidecars for cached clients, a `manifest.json` alias, and an entry-document
+overlay linking `/manifest.json`.
+
+Historical rollout workspace (now absent): `/tmp/happier-cli-macmini-test/hosted-ui-rollout-20260908`
+(equivalent to `/private/tmp/happier-cli-macmini-test/hosted-ui-rollout-20260908`).
+Evidence paths below are historical references relative to this workspace,
+not available repository files; see the September 9 recovery status above.
+
+| Identity | Value |
+| --- | --- |
+| Staged hosted tree | `deployment-candidate-v2/ui-web` (2,788 files) |
+| Tree manifest | `evidence/deployment-candidate-v2-sha256-manifest.txt` |
+| Tree manifest SHA-256 | `7063577d651b91534e898fe7714a5a0e153865b85028c4660624ed7c07b69a30` |
+| `index.html` SHA-256 | `c128766916c5f6ab6a85318addb8aa684900777365e38bd7f8015dca61a31620` |
+| Entry bundle | `/_expo/static/js/web/index-e7f5ed7f91a21506b4dd927741a78c8e.js` |
+| Entry bundle SHA-256 | `092a5771f7cf3f92adc358c9182658da2204ff45e9e94fa8bca128f17bc3b6d6` |
+| Served manifest | `/manifest.json`, JSON, 468 bytes |
+| Manifest body SHA-256 | `1313ac427c1765ce02c04a19fc13be82157f20d437c4c2de352ce6639165a8a9` |
+
+### Activation, refresh, and recovery
+
+The user owns this scoped operation, with execution by PSWE under PA
+coordination. PSWE activation evidence records an atomic directory exchange at
+`/Users/cuihuiai/.happier/self-host/ui-web/current`, without a restart; daemon
+PID `75201` and server PID `70892` were unchanged across activation.
+The sibling snapshots `current.pre-spawnnonce-20260908-170903` (original
+pre-fix baseline) and `current.pre-manifestfix-20260908-173119` (intermediate
+v1 deployment) were retained.
+
+The root response is `no-cache`; new hashed assets are served as immutable.
+Reload the browser, or close and reopen the hosted home-screen client, to fetch
+the new entry document. Do not clear storage or sign out for this update.
+The phone is assumed to use this hosted UI; native iOS artifact identity is
+unknown and no claim is made that the phone runs the latest native build.
+
+Both manifest files remain on disk, but `/manifest.webmanifest` returns the
+server's HTML fallback, not JSON. The v2 entry uses the original server-supported
+`/manifest.json` route; no server configuration change was needed. Preserve this
+entry-link overlay on future stock exports while the server limitation remains.
+
+Historical v2 compatibility recovery command, not currently usable from the
+absent workspace and not applicable to R3. At the time it required `current`
+to match the exact v2 candidate and all preconditions to hold:
+
+```bash
+cd /tmp/happier-cli-macmini-test/hosted-ui-rollout-20260908
+PYTHONDONTWRITEBYTECODE=1 bash rollout/rollback-v2.sh --apply
+```
+
+This restores the **pre-fix entry document** with both asset generations; it
+does not maintain the nonce fix. It neither blindly replaces `current` with
+the original baseline nor restarts the CLI. Stop on any nonzero exit or staging
+residue for PA-coordinated state classification, rather than retrying blindly.
+After compatibility rollback, `current.failed-*` contains the retained v2 tree
+despite the tool's "Previous (v1) tree" label; rely on content identity.
+Recovery was not executed during activation.
+
+### Evidence and acceptance boundary
+
+`qa-preactivation/report.txt` and `qa-v2/report.txt` record independent passes
+for their exact staged preactivation scopes only, not final live-session
+acceptance. `evidence/V2-ACTIVATION-EVIDENCE.md` is PSWE author evidence:
+it records matching live tree bytes, the served bundle and JSON manifest, and
+a credential-free real browser loading that bundle, mounting the SPA, and
+reporting no console errors. These observations establish browser boot, not
+authenticated spawning or end-to-end `spawnNonce` propagation.
+
+At the v2 checkpoint, no authenticated browser session creation was observed because no
+authenticated automation session was available. User manual phone acceptance
+was then pending. Independent final product assessment and independent review
+of that documentation candidate were then pending; neither author evidence nor
+the earlier scoped passes establish overall rollout completion.
+The September 9 user-reported outcome is recorded separately above.
+
+## Hosted completion-card rendering: R3
+
+The static hosted completion-card repair was activated during
+`2026-09-08T12:39:13Z` through `2026-09-08T12:39:16Z`. It displays an existing
+stored completion summary **inside the tool card**, not as a separate final
+assistant message. This record is limited to that activation and rendering
+contract; it is not a whole-system completion or actual-user acceptance claim.
+The earlier persistence, citation, CLI/Desktop, and v2 rollout records above
+remain historical records, not changes delivered by R3.
+
+### Rendering contract and limits
+
+The canonical `task_complete` tool has a dedicated renderer using the existing
+safe Markdown path. Summary and full-detail modes show the full multiline
+summary; compact/title-only mode remains title-only. A nonblank input summary
+wins, with a usable result summary as fallback. Missing, blank, or malformed
+content with no usable fallback produces no invented summary. Rendering never
+modifies stored rows.
+
+Historical compatibility correction is deliberately narrow: it requires a
+nonblank input summary, exact completion metadata, and a known erroneous
+`change_title` or generic identity. Any **own** `input.title` property prevents
+that historical correction, even when blank, whitespace-only, null, undefined,
+or malformed. An inherited property is not an own property. Explicit unrelated
+canonical tools, such as `Bash`, remain unchanged. Actual canonical
+`task_complete` is directly supported, including when an own title is present.
+Result-summary fallback does not by itself qualify a historical row for
+reclassification.
+
+This does not promise repair of every mislabeled row or recreation of missing
+stored text. It does not change CLI/native/provider persistence, restart
+sessions, fix a separate final assistant bubble, or repair citations. Additive
+canonical tool-name/schema entries belong to the UI/shared-protocol source
+candidate; they are not a deployed CLI update.
+
+### Exact source and hosted artifact
+
+Paths in this section are historical references to the now-absent rollout
+workspace stated above, not assertions of current artifact availability.
+The source identity is a base commit plus an uncommitted patch, not a new
+release commit.
+
+| Identity | Value |
+| --- | --- |
+| Source base | `ac0fe7965f946a0e38c2075f8eb7fe1a3cfedc7f` |
+| Source patch | `completion-card-repair/r3/candidate/source.patch` |
+| Patch SHA-256 | `6a9fe25a0ceb84e81e48110f206b9c8feaf381170a9fda7a413756c3c044f136` |
+| Exact 24-path inventory | `completion-card-repair/r3/candidate/changed-files.txt` |
+| Inventory SHA-256 | `8ae10b5c4d2e83a3bd4d1aa8a1c63638f9ae6436320e58b68f9c0f37ae668724` |
+| Static tree | `completion-card-repair/r3/candidate/ui-web` (3,692 files) |
+| Tree manifest | `completion-card-repair/r3/evidence/candidate-r3-sha256-manifest.txt` |
+| Tree manifest SHA-256 | `c88ca2e50304feb5fc4ea6ee774cf14ea1c2adddca918fc102ef3d7a7764aec4` |
+| Static `index.html` SHA-256 | `d2a8f49753b39e0aee24d45c4eaa2613cc14c4f4fb159823bc28941e447deeb5` |
+| Entry bundle | `/_expo/static/js/web/index-d661ba408f5130ccbec9007e5f8018cd.js` |
+| Entry bundle SHA-256 | `9eb6c2607f21a09b5fb74c161d0f4abcd9fdb3aa2a985db49562bf83394b54cb` |
+
+Implementation and artifact detail reside in
+`completion-card-repair/r3/evidence/COMPLETION-CARD-REPAIR-R3-EVIDENCE.md`
+and `completion-card-repair/r3/evidence/r3-artifact-hashes.txt`.
+That implementation packet describes the prepared, preactivation phase;
+its "nothing was activated" statement is historical, not the activation state
+recorded here.
+
+### Activation, refresh, and R3-only recovery
+
+PSWE's `completion-card-repair/r3/evidence/ACTIVATION-EVIDENCE.md` records the
+reviewed atomic exchange and the full live `current` tree matching the exact
+R3 manifest at `/Users/cuihuiai/.happier/self-host/ui-web/current`.
+Daemon PID `75201` and server PID `70892` retained their start times; neither
+was restarted. The new retained snapshot
+`current.pre-completioncard-20260908-193914` contains the v2 tree.
+The prior `current.pre-spawnnonce-20260908-170903` and
+`current.pre-manifestfix-20260908-173119` backups were also retained.
+
+The no-cache public entry references the R3 content hashes and the
+server-supported `/manifest.json` route. All previously published hashed
+assets remain available, and compressed sidecars are coherent with their
+raw assets. The public HTML includes the pre-existing server-appended welcome
+comment and blank line; it is not byte-identical to static `index.html`.
+The manifest body remains
+`1313ac427c1765ce02c04a19fc13be82157f20d437c4c2de352ce6639165a8a9`.
+
+Refresh the website, or close and reopen the hosted home-screen app. Do not
+sign out or clear storage. The phone's use of this hosted/PWA client remains
+an assumption; native artifact identity is unknown.
+
+Historical scoped compatibility recovery, not currently usable from the absent
+workspace. Execution would additionally require recovered and verified
+artifacts, rebound paths, separate authorization and exact-current R3 preconditions:
+
+```bash
+cd /tmp/happier-cli-macmini-test/hosted-ui-rollout-20260908/completion-card-repair/r3/rollout
+PYTHONDONTWRITEBYTECODE=1 bash rollback-r3.sh --apply
+```
+
+This restores the v2 entry while retaining both v2 and R3 assets and every
+earlier published generation. It **loses this completion-card rendering repair
+but retains the earlier nonce fix**. The rollback image manifest is
+`0ed4890974eec16c9d0791c93351e5b78ce80d7c3405fb5f620c310688ad4e02`;
+the restored entry hash is
+`c128766916c5f6ab6a85318addb8aa684900777365e38bd7f8015dca61a31620`.
+Do not use the inherited `rollout_v2.py` hint, the historical v2 rollback
+command above, an original exact-baseline restore, or CLI restart guidance
+for this R3 recovery. Stop on a failed precondition, nonzero exit, or staging
+residue and route state classification through PA; do not retry blindly.
+Rollback was not executed as part of the recorded activation.
+
+### Evidence attribution and remaining acceptance
+
+The independent Product Quality Engineer's
+`completion-card-repair/r3/qa-preactivation/report.txt` records
+`quality_gate_pass` only for the exact staged preactivation scope.
+That separately authored disposition is not a final live product assessment
+or a documentation gate.
+
+PSWE's public-browser activation evidence exercised the actually deployed
+`ToolView` with synthetic fixtures: the three runs reported 25, 51, and 162
+passing checks, with no page errors. Counts overlap and are not 238 distinct
+product scenarios. These are author observations, not independent approval
+or a reproduction of the user's exact card.
+
+Separately, the Independent Product Quality Engineer's live report
+`completion-card-repair/r3/qa-live/report.txt`, SHA-256
+`723f12f550520bde97dbcc3f701982aeaff0d8f2e15e290e4cc4be4f1676eff0`,
+returns `quality_gate_pass` for the **exact deployed conditional completion-card
+UI contract** bound to the R3 source and runtime identities above. Its independent
+public-browser runs exercised the actual deployed `ToolView` with synthetic
+payloads: 25, 51, and 162 overlapping checks passed, with no page errors.
+The report separately establishes live identity, compression, JSON manifest,
+published-asset retention, backup and process continuity within its stated
+scope. This is distinct from the staged preactivation disposition and PSWE
+author evidence. It is not an actual-user-card, phone, authenticated new-session,
+whole-platform, or documentation pass.
+
+The exact user card/event remains unknown; manual card review was explicitly
+deferred by the user on September 9 at `08:43+07:00`, not verified or failed.
+Original-phone New Session was separately reported as seeming to work at
+`08:38+07:00`; no wire-level conclusion follows from that report or the scoped
+live product result. PA retains coordination of the remaining evidence limits
+without treating deferred card review as a failure. This local documentation
+candidate also requires separate independent review; its predecessor was
+staged and independently reviewed, not published. No overall completion,
+publication, native-build currency, or final acceptance is implied.
+
+## Daemon-spawn compatibility experiment
+
+Record ID: `DSC-EXP-01`. Status: experimentally deployed on September 8, 2026,
+`16:45:30Z` through `16:47:32Z`; the daemon restarted at `16:46:52Z`.
+The user authorized experimental deployment after preparation; PA authorized
+the exact R5 candidate only after the Independent Product Quality Engineer's
+`quality_gate_pass` for preactivation readiness. Readiness was not deployment
+permission or phone acceptance. PSWE's activation evidence records the running
+version `0.2.11-cuihui-spawn-compat-r1` and preserved existing processes.
+No new session was created during activation. The September 9 user-reported
+phone outcome is recorded above; it is not independently verified wire-level
+acceptance. Fresh independent documentation review is required; exact
+legacy-phone wire correlation and modern-client live acceptance remain unverified.
+
+### Intent, scope, and evidence boundary
+
+A reported legacy request at `2026-09-08T20:13:11+07:00` omitted `spawnNonce`,
+created a real session, and was followed by fruitless polling of a nonce the
+old client had not sent. The experiment aims to return that exact accepted
+spawn's direct `sessionId` to a client that already accepts direct success,
+without requiring it to know the daemon-generated nonce.
+
+This original event is an approved assignment-supplied operational fact.
+The activation facts below are attributed to the exact operator evidence,
+not a runtime investigation or deployment performed by this author.
+The phone's native-versus-hosted identity and cache attribution are unproven.
+The hosted R3 completion-card UI remains active and is outside this change.
+Its independently reviewed live conditional rendering contract above is not
+evidence that the original phone new-session failure was fixed. That failure
+continued at the September 8 checkpoint; the September 9 user now reports
+New Session seems to work, without establishing the exact request/result path.
+
+The documentation impact is material: the machine RPC response timing/shape
+for nonce-omitting callers, mixed-client failure limits, and the deployed
+installation/recovery boundary need an explicit record. The affected families
+are this experiment/rollout/acceptance record,
+[CLI architecture](cli-architecture.md#accepted-spawn-identity-local-compatibility-experiment),
+and [compatibility](compatibility.md#daemon-spawn-compatibility-experiment).
+Relay `docs/protocol.md`, hosted assets, native phone artifacts, credentials,
+and all runtime/source files are unchanged by this documentation assignment.
+No support window, startup SLO, or caller-key idempotency commitment is added.
+
+### Source, deployed payload, and operator identity
+
+Historical experiment workspace (now absent):
+`/tmp/happier-cli-macmini-test/daemon-spawn-compat-20260908.jVMKQt`
+(equivalent to `/private/tmp/happier-cli-macmini-test/daemon-spawn-compat-20260908.jVMKQt`).
+The source was in `repo/` and the original documentation in
+`documentation/docs/`. Neither is currently available at those old paths.
+The source has now been recovered and integrated at the durable repository
+binding above; these old locators remain absent. The historical branch below
+identifies the original daemon candidate, not the combined integration branch.
+
+| Identity | Value |
+| --- | --- |
+| Runtime base | `0d99e21273200b3a43d9508d6878234895f0240a` |
+| Branch | `exp/daemon-spawn-compat-r1` |
+| Running experimental CLI version | `0.2.11-cuihui-spawn-compat-r1` |
+| Source patch SHA-256 | `07d3fb50e68030e7a6cd48bf3552297771fb1d8954c978bd3f81ed8dc9806e6e` |
+| Inspected changed handler | `apps/cli/src/api/machine/rpcHandlers.ts` |
+| Handler SHA-256 | `e945ed4523b0e3fcb36a96b307b05a017aac3c271cf2fefb5425f73723063241` |
+| Inspected changed author test | `apps/cli/src/api/machine/rpcHandlers.test.ts` |
+| Test SHA-256 | `f1e66c24f825952bbd419d783dfd1c646067ddbb3768cfe6d46692a38799748b` |
+| Native executable SHA-256 | `fcaab27ce06cb848cd782987edaec8c3782255dcda94f499ceec3df2f945cf30` |
+| Full payload manifest, `evidence/payload-manifest.tsv`, SHA-256 | `51366c8835df336c10bf25f2c40a737c6b3be68f1cf74750c2afad16afb6e6d9` |
+| Release archive SHA-256 | `b63b8de7b871c6623e5c10e3ad9d18f6918ec5a3b25d260342592b229d24e6bd` |
+| R5 helper, `deploy/happier-compat-switch.sh`, SHA-256 | `099bcc75305573fb69f7ffbc902a67f2249005e9f506edc79c8160eacbc496e9` |
+| R5 operations, `deploy/compat_ops.py`, SHA-256 | `7b01cb260ee99944ada385f5c0f4c3d71f06ca740f4d237ad30b433a28201702` |
+
+The historical frozen payload root was
+`candidate/happier-v0.2.11-cuihui-spawn-compat-r1-darwin-arm64`.
+The archive was recorded at
+`repo/dist/release-assets/cli/happier-v0.2.11-cuihui-spawn-compat-r1-darwin-arm64.tar.gz`;
+the earlier missing-archive claim was disproven at that checkpoint, when no
+artifact loss or restoration had occurred. This is not evidence of availability
+after the old workspace disappeared. Paths in this section are historical
+references relative to that workspace; payload/archive recovery is not
+established by restoring these documents.
+
+The custom/parser-unfriendly version is deliberate: a parser-friendly label
+could change the old client's payload selection and mask the behavior being
+tested. This is a daemon-side compatibility experiment, not another client
+payload upgrade.
+
+For the provider-safe RPC, a valid caller nonce (a nonblank string) preserves
+the modern response, including accepted-but-pending success. An absent,
+non-string, empty, or whitespace-only nonce selects the shared
+`settleAcceptedSpawnIdentity` adapter also used by the legacy RPC. An already
+direct ID or non-success result passes through. Pending acceptance is resolved
+through `awaitSpawnedSessionId` using only the nonce on that acceptance result;
+successful settlement returns the actual `sessionId` and preserves a boolean
+`pendingFirstInputAccepted`. There is no newest-session/directory guess or
+second spawn by the adapter.
+
+The existing 90-second settlement default can still return
+`SESSION_WEBHOOK_TIMEOUT`. On that response the inspected old client still
+polls its own unknown nonce. A real created session therefore does not by itself
+establish client acceptance. Existing semantic coalescing and retry limitations
+remain: two identical legacy requests are not guaranteed to create different
+sessions, and nonce-less calls do not gain caller-key idempotency.
+
+### Actual daemon-only activation and preserved state
+
+`activation/ACTIVATION-REPORT.txt`, its sanitized step files `01-preflight.txt`
+through `05-verify-new.txt`, and the exact
+`deploy/receipts/receipt-20260908T164636Z.txt` record all five steps exiting 0.
+The receipt SHA-256 is
+`beb8937d310d99baeb5c0141c83d4f143e172460348b5b15d6a3dbf6b4adbd57`.
+Operator `VERIFY=PASS` is execution evidence, not an independent gate.
+
+The full 57,376-entry source and staged payloads were exhaustively checked
+against the pinned manifest. The candidate was copied, not consumed, into a
+new version directory. Under the switch lock the staged tree was rechecked;
+`current` and then `current.version` were replaced by temporary-file renames,
+with receipted phases completing at `16:46:43Z`. These are two guarded atomic
+renames, not a claim that pointer and marker change as one atomic transaction.
+Post-restart verification checked the full active payload again.
+
+| State | Before activation | After activation |
+| --- | --- | --- |
+| `~/.happier/cli/current` | `versions/0.2.11-cuihui-task-complete-v3` | `versions/0.2.11-cuihui-spawn-compat-r1` |
+| `current.version` | `0.2.11-local-final3` plus newline | `0.2.11-cuihui-spawn-compat-r1` plus newline |
+| Daemon PID | `75201` | `83830`, advertising the exact experimental version |
+| Version inventory | Eight old directories | All eight retained plus the new ninth |
+| `previous` | `versions/0.2.11-local-final2` | Unchanged |
+| `previous-before-task-complete-fix` | `versions/0.2.11-local-final3` | Unchanged |
+
+The supported owning command was `happier service restart`, not
+`happier daemon service restart`; the helper previewed the service plan and
+then used `/Users/cuihuiai/.happier/bin/happier service restart`. It did not
+invoke `launchctl` directly or restart session runners. All 14 protected
+PID/start identities survived: eight runners, five children, and relay
+`70892`. Main runner `81619`, Copilot child `82196`, and server `70892` were
+unchanged. The eight runner PPID changes from `75201` to `1` were expected,
+diagnostic-only reparenting, not lost sessions. The machine and relay route
+remained the same.
+
+The old v3 payload remains available with native SHA-256
+`a7d473a2916b14a3deb4023c9c7e0984eecb2282acd952f3331e0a4d861823b7`;
+existing runners can still execute from it. Hosted R3 `index.html` remains
+`d2a8f49753b39e0aee24d45c4eaa2613cc14c4f4fb159823bc28941e447deeb5`.
+There was no pruning, frozen-candidate consumption, session creation, phone
+cache clearing, native-app replacement, relay restart, or UI change.
+
+### Prepared recovery, not live-tested rollback
+
+No activation step failed; diagnosis and rollback were not invoked.
+The historical R5 procedure has independent fixture recovery evidence, not an observed
+production rollback. The command below is historical and not currently usable
+from the absent workspace. Script, payload, manifest and receipt recovery,
+hash verification and path rebinding remain prerequisites, not actions
+authorized by this closure update. Non-exact daemon helper reconstructions were
+discarded; the original receipt and a current executable recovery procedure
+have not been re-established. A later authorized recovery must retain both
+independent pins and use this exact receipt; never select a guessed retry receipt:
+
+```bash
+ROOT=/private/tmp/happier-cli-macmini-test/daemon-spawn-compat-20260908.jVMKQt
+cd "$ROOT/deploy"
+export HAPPIER_COMPAT_CANDIDATE_ROOT="$ROOT/candidate/happier-v0.2.11-cuihui-spawn-compat-r1-darwin-arm64"
+export HAPPIER_COMPAT_EXPECT_OLD_MARKER_B64=MC4yLjExLWxvY2FsLWZpbmFsMwo=
+RECEIPT="$ROOT/deploy/receipts/receipt-20260908T164636Z.txt"
+./happier-compat-switch.sh diagnose "$RECEIPT"
+```
+
+Keep both pins in every recovery invocation and confirm the exact R5 identities
+above. Diagnosis, not an unconditional command sequence, determines the route:
+
+| Diagnosis | Permitted route under the approved procedure |
+| --- | --- |
+| `known_complete` or `known_recoverable_partial` | Run `./happier-compat-switch.sh rollback "$RECEIPT"`. Only if it exits 0, run `./happier-compat-switch.sh restart`, then, only after successful restart, `./happier-compat-switch.sh verify --expect old "$RECEIPT"`. |
+| `known_unmutated` | No rollback and no restart. |
+| `known_rolled_back` | Restart through the helper, then verify old only after successful restart. |
+| `INVALID_RECEIPT_BINDING`, `UNKNOWN_OR_CONCURRENT`, or `known_partial_rollback_needs_coordination` | Stop and escalate through PA; no rollback retry or restart. |
+
+A refused or failed rollback never permits restart. Missing receipt, failed
+restart, unknown state, or nonzero verification requires coordination rather
+than blind continuation. Recovery restores the exact old v3 pointer and the
+different original marker bytes `0.2.11-local-final3\n`, retaining the compat
+payload. Generic installers, pruning, direct service-manager commands,
+whole-stack restart, credential changes, and session cleanup are not this
+procedure and are not authorized by this record.
+
+### Independent evidence and bounded history
+
+Independent preactivation R1-R4 helper gates failed and their evidence was
+historically recorded in `quality-preactivation*/REPORT.txt`; those files are
+not recovered here. Repairs culminated in the
+Independent Product Quality Engineer's R5 `quality_gate_pass`, closed at
+`2026-09-08T16:40:51.604345Z` in `quality-preactivation-r5/REPORT.txt`.
+That historical readiness result binds the source, payload and R5 helper above.
+It includes 96 required-binding refusals, applicable recovery regressions, and
+12/12 isolated compiled-branch tests with synthetic dependencies. The
+reviewer-qualified synthetic child-reparenting `test_06` failure remains
+visible; it is not a claim of failure in the observed runner reparenting.
+R5 did not test live phone behavior or replace the later deployment review.
+
+The Independent Product Quality Engineer subsequently returned
+`quality_gate_pass` for **EXPERIMENTAL DEPLOYMENT AND PRESERVATION ONLY** in
+`quality-live/REPORT.txt`, evidence closure `2026-09-08T16:54:41.545070Z`,
+SHA-256 `9268e1a8edc4c484f390fe305c329310c37feb91bc07cd13db843dc57a9ad03b`.
+This report became available after the preserved R2 author checkpoint at
+`2026-09-08T16:54:07Z`; the earlier unavailability was not a failed gate.
+The independent review matched the full installed 57,376-entry tree to the
+approved manifest with zero missing, extra, or differing entries, and observed
+persistent daemon `83830` on the same registered machine and relay route.
+All 14 protected PID/start/executable identities, eight prior version
+directories, prior pointers, old v3 native binary and hosted R3 entry point
+were preserved. Persistence means launch-at-load and restart-on-failure
+configuration with current stable operation, not an exercised reboot or
+future restart. Old-directory preservation is not a full old-tree byte check.
+This scoped pass is not nonce-less or nonce-bearing live RPC/client acceptance,
+phone success, live rollback, whole-issue completion, or documentation approval.
+R5 source/compiled synthetic evidence remains preactivation evidence.
+A fresh independent documentation gate is required for these exact updated
+three-document bytes.
+
+### Acceptance record and evidence still required
+
+| ID | Bounded requirement | Current evidence and remaining work |
+| --- | --- | --- |
+| `DSC-A01` | A nonce-less provider-safe request receives the exact accepted session's direct ID, without heuristic lookup or an adapter-triggered second spawn. | R5 independent compiled-branch coverage passes with synthetic dependencies. User reports original-phone New Session seems to work on September 9 at `08:38+07:00`; exact wire request/result correlation remains unverified. Direct ID is conditional on successful settlement. |
+| `DSC-A02` | Preserve valid-nonce modern behavior, shared legacy settlement, and boolean `pendingFirstInputAccepted`; handle absent/invalid/blank nonce and settlement failure explicitly. | R5 independent compiled-branch and regression evidence covers these branches. Live first-input/error and modern nonce-bearing client outcomes remain pending. |
+| `DSC-A03` | Bind the full native payload and final guarded rollout/rollback to immutable identities, retain old pointer/marker and versions, and restart only daemon without disturbing runners/server/R3 UI. | Exact identities and historical R5 readiness are bound above; the independent live `quality_gate_pass` verified the installed full tree, persistent daemon and protected-process/version/pointer/old-v3-binary/hosted-R3 preservation within its deployment-only scope. Real rollback was not exercised; current recovery-artifact availability/rebinding remains unverified. |
+| `DSC-A04` | Evaluate the experiment with at most two later controlled test sessions, plus user phone acceptance coordinated by PA. | Deployment created no new sessions. User now reports original-phone New Session seems to work; no additional test was performed for this closure update. Exact request/result identity and first-input custody remain unverified; the separate manual card review is user-deferred, not a failure. |
+
+The original-phone outcome is user-reported, not a result of deployment,
+synthetic tests or an independently captured wire trace. Native-versus-hosted provenance and cache cause
+remain unknown; do not clear the phone cache or infer a client upgrade. A
+modern nonce-bearing client's live outcome is also pending. Preserve the
+90-second settlement/old-client timeout-polling and coalescing/retry limits
+above; deployment does not remove those causal boundaries.
+
+PA coordinates separate product and documentation review and routes repairs
+to PSWE or Product Documentation Engineer respectively. Any post-deployment
+documentation change needs a new exact candidate and separate independent
+review. Experimental deployment is historically evidenced and the apparent
+phone success is user-reported; independently verified wire-level repair,
+overall completion, final acceptance, publication and approval of this updated
+documentation candidate are not claimed.
 
 ## Synchronizing with upstream
 

@@ -1007,6 +1007,167 @@ describe('registerMachineRpcHandlers', () => {
     expect(emitActionOperationRevision.mock.calls.map(([snapshot]) => snapshot.revision)).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it('resolves this launch own generated nonce for a nonce-less provider-safe spawn before returning success', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    // The daemon mints its own nonce when the caller supplied none, and reports it
+    // back on the accepted-but-pending envelope.
+    const spawnSession = vi.fn(async () => ({
+      type: 'success' as const,
+      spawnNonce: 'daemon-generated-nonce',
+      sessionIdStatus: 'pending' as const,
+    }));
+    const resolveSpawnSessionByNonce = vi.fn(async () => ({
+      status: 'success' as const,
+      sessionId: 'session-for-daemon-generated-nonce',
+    }));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        resolveSpawnSessionByNonce,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE);
+    expect(handler).toBeDefined();
+
+    await expect(handler!({
+      directory: '/tmp',
+      pendingFirstInput: { text: 'hello', localId: 'local-first-input-1' },
+    })).resolves.toEqual({
+      type: 'success',
+      sessionId: 'session-for-daemon-generated-nonce',
+      pendingFirstInputAccepted: true,
+    });
+    expect(resolveSpawnSessionByNonce).toHaveBeenCalledWith(
+      'daemon-generated-nonce',
+      expect.any(Number),
+    );
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('never cross-binds two concurrent nonce-less provider-safe spawns that resolve out of order', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    let spawnIndex = 0;
+    const spawnSession = vi.fn(async () => {
+      spawnIndex += 1;
+      return {
+        type: 'success' as const,
+        spawnNonce: `daemon-nonce-${spawnIndex}`,
+        sessionIdStatus: 'pending' as const,
+      };
+    });
+    const pendingOnce = new Set<string>();
+    const resolveSpawnSessionByNonce = vi.fn(async (spawnNonce: string) => {
+      // The first launch settles last: its nonce stays pending for one poll.
+      if (spawnNonce === 'daemon-nonce-1' && !pendingOnce.has(spawnNonce)) {
+        pendingOnce.add(spawnNonce);
+        return { status: 'pending' as const };
+      }
+      return { status: 'success' as const, sessionId: `session-for-${spawnNonce}` };
+    });
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        resolveSpawnSessionByNonce,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE)!;
+    const [first, second] = await Promise.all([
+      handler({ directory: '/tmp/same-directory' }),
+      handler({ directory: '/tmp/same-directory' }),
+    ]);
+
+    expect(first).toEqual({ type: 'success', sessionId: 'session-for-daemon-nonce-1' });
+    expect(second).toEqual({ type: 'success', sessionId: 'session-for-daemon-nonce-2' });
+    expect(spawnSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns a bounded explicit failure when a nonce-less provider-safe spawn identity never resolves', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async () => ({
+      type: 'success' as const,
+      spawnNonce: 'daemon-nonce-never-settles',
+      sessionIdStatus: 'pending' as const,
+    }));
+    const resolveSpawnSessionByNonce = vi.fn(async () => ({ status: 'pending' as const }));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        resolveSpawnSessionByNonce,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE)!;
+    vi.stubEnv('HAPPIER_SPAWN_SESSION_ID_RESOLVE_TIMEOUT_MS', '150');
+    vi.stubEnv('HAPPIER_SPAWN_SESSION_ID_RESOLVE_POLL_INTERVAL_MS', '25');
+    try {
+      await expect(handler({ directory: '/tmp' })).resolves.toEqual({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+        errorMessage: 'Timed out waiting for the spawned session id to resolve',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a nonce-less provider-safe spawn that already carries a session id untouched', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async () => ({ type: 'success' as const, sessionId: 'direct-session' }));
+    const resolveSpawnSessionByNonce = vi.fn(async () => ({ status: 'not_found' as const }));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        resolveSpawnSessionByNonce,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE)!;
+    await expect(handler({ directory: '/tmp' })).resolves.toEqual({
+      type: 'success',
+      sessionId: 'direct-session',
+    });
+    expect(resolveSpawnSessionByNonce).not.toHaveBeenCalled();
+  });
+
   it('resolves accepted spawn identity before returning success on the released legacy RPC', async () => {
     const registered = new Map<string, (params: any) => Promise<any>>();
     const rpcHandlerManager = {
