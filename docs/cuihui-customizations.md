@@ -507,8 +507,11 @@ Truthful limits of the durable retirement:
   `handleAbort`), and `AcpBackend.dispose()` deliberately does not route through
   `cancel()` at all: it calls `connection.peer.cancel` directly. An ordinary
   `happier session stop` is delivered as an abort and lands in that same
-  `handleAbort` path — verified on a healthy v10 session that was only stopped and
-  still recorded two `turn_aborted` rows. Stop and user-cancel are therefore
+  `handleAbort` path — verified on healthy v10 control session
+  `cmttehs3600bdnphtaleuzlol`, which was created, allowed to persist a turn, then
+  stopped and restarted as a resume control. The abort harness was never invoked
+  during that run, yet its persisted transcript still contains `turn_aborted`
+  rows. Stop and user-cancel are therefore
   indistinguishable to the backend, so observed provider activity is the only
   sound discriminator available. Adding a distinct shutdown intent would mean
   changing the shared session-control protocol, which is outside this fix.
