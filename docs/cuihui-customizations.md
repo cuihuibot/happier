@@ -1472,17 +1472,53 @@ happier daemon status   # must report the rollback version
 target for this rollout. Its native SHA-256 is
 `fcaab27ce06cb848cd782987edaec8c3782255dcda94f499ceec3df2f945cf30`, unchanged by
 this deployment. Rolling back restores nonce-less spawn compatibility and gives
-up the merged continuation behavior. `previous` and
+up the merged continuation behavior. `current`, `current.version` and
 `previous-before-task-complete-fix` were not modified.
 
-Use the recipe above, not a product-initiated rollback. `current` was switched
-by hand rather than through `promoteVersionedPayload`, so the generic
-`previous` marker that `rollbackVersionedPayload` consumes still points at
-`0.2.11-local-final2`. A product-initiated rollback would therefore land on
-that much older build and silently drop the nonce-less spawn compatibility.
-`previous` is deliberately left unchanged, exactly as the previous Cuihui
-activation left it; `previous-before-continuation-366ac45a` is the correct
-target for this rollout.
+#### Product-initiated rollback bookkeeping (corrected after the rollout)
+
+`current` was switched by hand rather than through `promoteVersionedPayload`,
+so this rollout did not update the generic pointer and marker that
+`rollbackVersionedPayload` consumes. That left two separate defects, both now
+repaired as a metadata-only change:
+
+1. `rollbackVersionedPayload` resolves its target from the
+   `previous.version` **marker file**, not from the `previous` symlink. That
+   file did not exist, so a product-initiated rollback would have thrown
+   `Cannot rollback first-party payload without a previous installed version`
+   rather than rolling back at all. An earlier note in this document claimed it
+   would silently land on `0.2.11-local-final2`; that claim was wrong, and the
+   observed pre-repair resolution was the throw.
+2. The `previous` symlink was separately stale, still pointing at the much
+   older `0.2.11-local-final2`, and was an absolute rather than a relative
+   target.
+
+Both were corrected through the product helpers `syncInstalledPayloadPointer`
+and `writeInstalledVersionMarker`, so `previous` and `previous.version` now
+agree with what a normal promotion would have written:
+
+| Bookkeeping state | Before repair | After repair |
+| --- | --- | --- |
+| `~/.happier/cli/previous` | `/Users/cuihuiai/.happier/cli/versions/0.2.11-local-final2` | `versions/0.2.11-cuihui-spawn-compat-r1` |
+| `~/.happier/cli/previous.version` | absent | `0.2.11-cuihui-spawn-compat-r1` plus newline |
+| Product rollback resolution | throws, no previous marker | resolves `versions/0.2.11-cuihui-spawn-compat-r1` |
+
+The former `previous` target is preserved verbatim at
+`~/.happier/cli/previous-before-rollback-metadata-repair-366ac45a`. There was no
+marker to preserve, because `previous.version` did not exist; reverting this
+repair therefore means deleting that file, not rewriting it.
+
+A product-initiated rollback now lands on the same target as the manual recipe
+above, whose native SHA-256 is
+`fcaab27ce06cb848cd782987edaec8c3782255dcda94f499ceec3df2f945cf30`.
+`previous-before-continuation-366ac45a` remains the explicitly named target for
+this rollout. The repair changed deployment bookkeeping only: no rebuild,
+redeploy, service restart or live rollback was performed, `current`,
+`current.version`, the installed combined artifact
+(`14b6403c4838615534fc0d459453b97df4c7ea5986b36417092c64a6eb9322c0`), the
+daemon, the relay, the user sessions and every retained version directory were
+left untouched. Rollback resolution was verified read-only, up to but not
+including the pointer write; a live rollback was still not exercised.
 
 ### Developer smoke evidence only
 
