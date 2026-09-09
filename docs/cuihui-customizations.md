@@ -495,11 +495,26 @@ Truthful limits of the durable retirement:
   work really does stop; this was verified as a live control in round 5, and
   ordinary-mode resume after a normal stop was verified again live on v11.
 - A continuation that was armed but never opened, cancelled while the session is
-  otherwise idle, does **not** durably retire the provider session. There is no
-  observed autonomous work to abandon at that point, and treating it as a
-  cancellation would break every normal session stop. If the provider was in fact
-  still working silently at that instant, a later resume could still restore that
-  work; this is a known, bounded gap, not a guarantee.
+  otherwise idle, does **not** durably retire the provider session. If the
+  provider was in fact still working silently at that instant, a later resume
+  could still restore that work.
+
+  This is an architectural limit of the current control surface, not an untried
+  option. The obvious alternative is to discriminate on caller intent — durably
+  retire on a user cancel, but not on a shutdown — and that information does not
+  exist at this boundary. Both `runtime.cancel()` call sites in
+  `runStandardAcpProvider.ts` are user-initiated (`cancelActiveTurn` and
+  `handleAbort`), and `AcpBackend.dispose()` deliberately does not route through
+  `cancel()` at all: it calls `connection.peer.cancel` directly. An ordinary
+  `happier session stop` is delivered as an abort and lands in that same
+  `handleAbort` path — verified on a healthy v10 session that was only stopped and
+  still recorded two `turn_aborted` rows. Stop and user-cancel are therefore
+  indistinguishable to the backend, so observed provider activity is the only
+  sound discriminator available. Adding a distinct shutdown intent would mean
+  changing the shared session-control protocol, which is outside this fix.
+  Round 6 v10 is the evidence for the alternative being unsafe: retiring on the
+  wider armed-only signal wiped the resume id of every normally stopped Copilot
+  session, and both directions are now pinned by regressions.
 - The metadata write is best-effort at the transport level: a write that is
   accepted locally but lost server-side would not be detected here. A write that
   fails outright is surfaced as the error status above.
