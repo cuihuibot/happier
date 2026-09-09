@@ -87,6 +87,9 @@ Field names below match on-wire payloads.
 
 - `new-message`
   - `body`: `{ t: "new-message", sid, message: { id, seq, content, localId, createdAt, updatedAt } }`
+  - ACP runtimes apply the
+    [task-complete summary projection contract](task-complete-summary-projection.md)
+    before publishing a provider summary as a durable assistant message.
 
 - `update-account`
   - `body`: `{ t: "update-account", id, settings?, github? }`
