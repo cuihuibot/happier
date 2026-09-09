@@ -783,37 +783,43 @@ changed.
 
 | Item | Value |
 | --- | --- |
-| Version label | `0.2.11-cuihui-autopilot-continuation-366ac45a-v11` |
-| Source commit | `426fa0b343` (round-6 durable retirement, plus this record) |
-| Native `happier` SHA-256 | `32908caa228d2f7cc7cc25bbd020b8bf8ef7ccc775600467031a6a3e3435b9ed` |
-| Tarball SHA-256 | `4b1b10b8f636db3410464ee17a72b3fc66fb1f5537d2c55aac8dd51e0f25ad3b` |
-| Install path | `~/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v11` |
+| Version label | `0.2.11-cuihui-autopilot-continuation-366ac45a-v12` |
+| Product build source | `42d8dd3c9aa33ee176abce19820abdd855356ac2` |
+| Copilot build exercised | `1.0.84-3` |
+| Native `happier` SHA-256 | `1f9bea06e687135a36c88e3d3aa9341336afa0cf2d6747471a61aef76e82b9dc` |
+| Tarball SHA-256 | `cf8b3575598eee8fb906e4e929d998a4f0bec331ad40698626599b1845fb7966` |
+| Installed/current target | `/Users/clawbot/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v12` |
 
 `…-v10` carried the durable retirement but retired far too widely, clearing the
-resume id of every normally stopped Copilot session. Do not roll back to v10;
-use v9 or earlier.
+resume id of every normally stopped Copilot session. It remains retained but is
+not an acceptable rollback target.
 
 Install and activate:
 
 ```bash
-ln -sfn ~/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v11 \
-  ~/.happier/cli/current
+ln -sfn /Users/clawbot/.happier/cli/versions/0.2.11-cuihui-autopilot-continuation-366ac45a-v12 \
+  /Users/clawbot/.happier/cli/current
 launchctl kickstart -k gui/$(id -u)/com.happier.cli.daemon.default
 happier daemon status   # must report the expected CLI Version
 ```
 
 Roll back by pointing `current` at any retained version and kickstarting the
 same service. Retained rollback targets, newest first:
-`…-v9`, `…-v8`, `…-v7`, `…-v6`, `…-v5`, and the original
-`0.2.11-cuihui-task-complete-v3`.
+`…-v11`, `…-v9`, `…-v8`, `…-v7`, `…-v6`, `…-v5`, `…-v4`, `…-v3`, and the
+original `0.2.11-cuihui-task-complete-v3`. Current `…-v12` is not a rollback
+target. Rolling back to v11 restores its older limitation: an explicitly
+cancelled continuation that is armed but not yet opened cannot be durably
+retired.
 
 Compatibility: the change is confined to the ACP backend, its runtime, the
-prompt loop and the vendor resume id publisher. It alters cancellation behavior
-only for providers that enable the autonomous continuation capability. The
-durable retirement removes one metadata field (`copilotSessionId`) for a
-cancelled session only, so no stored transcript, session record or provider
-other than Copilot is affected, and rolling back needs no data migration: an
-already-cleared field simply means the next turn opens a fresh provider session.
+prompt loop and the vendor resume id publisher. Autonomous continuation remains
+provider-gated, and cancellation intent defaults to shutdown for unconverted
+callers and providers. An explicit Copilot cancellation durably removes one
+metadata field (`copilotSessionId`) through a server-acknowledged write; failure
+is reported as an error rather than a clean stop. No stored transcript or
+session record is removed, no provider other than Copilot is affected, and
+rolling back needs no data migration: an already-cleared field simply means the
+next turn opens a fresh provider session.
 
 ## Synchronizing with upstream
 
