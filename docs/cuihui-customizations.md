@@ -1384,6 +1384,119 @@ phone success is user-reported; independently verified wire-level repair,
 overall completion, final acceptance, publication and approval of this updated
 documentation candidate are not claimed.
 
+## Cuihui Mac mini rollout: continuation + preserved spawn compatibility
+
+This is the first deployment of the merged autopilot-continuation work to
+Cuihui's Mac mini. It is a CLI-only rollout. It replaces neither the hosted UI,
+the relay, the self-hosted server, the native desktop app, nor any Tailscale,
+network or authentication configuration.
+
+### Why this candidate is not the accepted Quinann artifact
+
+The Quinann qualification artifact `0.2.11-cuihui-autopilot-continuation-366ac45a-v12`
+was built from the continuation branch alone. Cuihui was already running the
+separately developed `0.2.11-cuihui-spawn-compat-r1`, whose daemon settles a
+nonce-less legacy or mobile new-session request to its own real session id.
+Merged PR #2 (`5636991f689b2e5b2502780ead5a6c92bd9c88cc`) does **not** contain
+that compatibility work; `c50f6dbf545194cdad98a3b549c51a1f3e468164` is not an
+ancestor of the merge and `settleAcceptedSpawnIdentity` is absent from the
+merged `apps/cli/src/api/machine/rpcHandlers.ts`. Installing the Quinann
+artifact on Cuihui would therefore have regressed confirmed new-session
+creation, so it was not reused.
+
+### Exact source lineage
+
+| Item | Value |
+| --- | --- |
+| Merged continuation source | `5636991f689b2e5b2502780ead5a6c92bd9c88cc` (PR #2 merge) |
+| Approved PR head | `9fd570390b6f5a5450b2e3faae1d38db946a8148` |
+| Preserved compatibility source | `c50f6dbf545194cdad98a3b549c51a1f3e468164` |
+| Combined deployed source | `8280b91f0c09ea3ce141ab56f28ecc5908c7b8fb` |
+
+The compatibility commit was carried forward whole. `apps/cli/src/api/machine/rpcHandlers.ts`,
+its tests and `packages/protocol/src/tools/v2/*` are byte-identical to the
+compatibility source; the only conflict was additive prose in this file, and
+both narratives were kept.
+
+Provenance of the running fix was established before any change: the installed
+`0.2.11-cuihui-spawn-compat-r1` payload contains `settleAcceptedSpawnIdentity`,
+and its compiled region in `package-dist/api-*.mjs` is byte-identical to the
+region emitted by this candidate's build. Preservation is therefore an observed
+compile-output match, not an inference from the commit message.
+
+### Exact artifact
+
+| Item | Value |
+| --- | --- |
+| Version label | `0.2.11-cuihui-continuation-spawn-compat-366ac45a-r1` |
+| Native `happier` SHA-256 | `14b6403c4838615534fc0d459453b97df4c7ea5986b36417092c64a6eb9322c0` |
+| Tarball SHA-256 | `d9dc4cf83a8443ace6fbed9e66a070a81d27e9de8fb06d4525767c434d9b461f` |
+| Builder | `scripts/pipeline/release/build-cli-binaries.mjs`, target `darwin-arm64` |
+| Bun | `1.4.2`, workspace-local toolchain |
+| Installed path | `/Users/cuihuiai/.happier/cli/versions/0.2.11-cuihui-continuation-spawn-compat-366ac45a-r1` |
+
+Bun 1.4.2 compresses the embedded payload, so `strings` no longer finds source
+identifiers inside the native binary. Artifact content is verified through the
+compiled `apps/cli/dist` bundle and through live behavior, not through `strings`.
+
+### Target route and activation
+
+| State | Before | After |
+| --- | --- | --- |
+| `~/.happier/cli/current` | `versions/0.2.11-cuihui-spawn-compat-r1` | `versions/0.2.11-cuihui-continuation-spawn-compat-366ac45a-r1` |
+| `current.version` | `0.2.11-cuihui-spawn-compat-r1` | `0.2.11-cuihui-continuation-spawn-compat-366ac45a-r1` |
+| Daemon PID | `882` | `64215` |
+| Daemon HTTP port | `49209` | `58564` |
+| Relay service `happier-server` | PID `641` | PID `641`, unchanged |
+
+Activation used the owning command `/Users/cuihuiai/.happier/bin/happier service restart`.
+`launchctl` was not invoked directly and session runners were not restarted.
+All four pre-existing user sessions survived with unchanged PIDs.
+
+Replace the `current` symlink with `mv -h`. A plain `mv` resolves the existing
+symlink and drops the replacement *inside* the old version directory instead of
+switching the pointer.
+
+### Rollback
+
+```bash
+ln -sfn versions/0.2.11-cuihui-spawn-compat-r1 ~/.happier/cli/current.tmp
+mv -fh ~/.happier/cli/current.tmp ~/.happier/cli/current
+printf '%s\n' 0.2.11-cuihui-spawn-compat-r1 > ~/.happier/cli/current.version.tmp
+mv -f ~/.happier/cli/current.version.tmp ~/.happier/cli/current.version
+/Users/cuihuiai/.happier/bin/happier service restart
+happier daemon status   # must report the rollback version
+```
+
+`~/.happier/cli/previous-before-continuation-366ac45a` points at the rollback
+target for this rollout. Its native SHA-256 is
+`fcaab27ce06cb848cd782987edaec8c3782255dcda94f499ceec3df2f945cf30`, unchanged by
+this deployment. Rolling back restores nonce-less spawn compatibility and gives
+up the merged continuation behavior. `previous` and
+`previous-before-task-complete-fix` were not modified.
+
+### Developer smoke evidence only
+
+On the deployed candidate, through the real relay machine RPC route: a
+nonce-less legacy spawn returned a usable session id directly; a nonce-carrying
+spawn kept the modern asynchronous acceptance and then settled; an ordinary
+Copilot turn produced a durable reply; a tool-using turn persisted both its
+post-turn prose and its final `SUMMARY:` line; a real cancel stopped a running
+120-second command while leaving the session immediately reusable for a further
+durable reply; and all pre-existing sessions stayed `runner_alive`.
+
+One earlier smoke turn parked with no visible reply. The cause was an
+unanswered interactive shell permission request in a `default`-permission
+session with no responder, observed in the provider log as
+`Permission request (kind=shell): routing via PermissionService`. It is not a
+deployment regression, and the same prompt shape completed normally under
+`bypassPermissions`.
+
+This is developer execution evidence. Independent product-quality evaluation,
+including UI and browser transcript rendering and a New Session created from the
+authenticated hosted UI against this host, is still required and is not claimed
+here.
+
 ## Synchronizing with upstream
 
 After merging `upstream/dev`, rerun all tests listed above. Remove a
