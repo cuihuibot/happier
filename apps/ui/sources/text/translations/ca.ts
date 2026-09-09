@@ -1321,6 +1321,8 @@ export const ca: TranslationStructure = {
         openMachine: 'Obrir màquina',
         terminalUrlPlaceholder: 'happier://terminal?...',
         accountUrlPlaceholder: 'happier:///account?...',
+        accountLinkKeyFamilyUnverifiedTitle: 'No es pot verificar la clau de xifratge d\'aquest compte',
+        accountLinkKeyFamilyUnverifiedBody: 'Aquest dispositiu no ha pogut confirmar quina clau de xifratge fa servir el compte, així que s\'ha aturat en lloc de desar una clau possiblement incorrecta. Obre Configuració → Compte al dispositiu on ja has iniciat sessió, espera que acabi de sincronitzar i torna a escanejar.',
         restoreQrInstructions: 'En un dispositiu on ja hagis iniciat sessió, ves a Configuració → Compte i escaneja aquest codi QR.',
         externalAuthVerifiedTitle: ({ provider }: { provider: string }) => `${provider} verificat`,
         externalAuthVerifiedBody: ({ provider }: { provider: string }) =>

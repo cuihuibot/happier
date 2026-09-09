@@ -96,11 +96,13 @@ describe('classifyAccountLinkKeyFamily (old producer -> new receiver)', () => {
         })).toEqual({ resolved: false, reason: 'key_rejected_by_account_evidence' });
     });
 
-    it('reports absent evidence distinctly from a rejected key', () => {
-        expect(classifyAccountLinkKeyFamily({ payload: dataKeyBytes, settingsCiphertext: null }))
-            .toEqual({ resolved: false, reason: 'account_evidence_absent' });
-        expect(classifyAccountLinkKeyFamily({ payload: dataKeyBytes, settingsCiphertext: '   ' }))
-            .toEqual({ resolved: false, reason: 'account_evidence_absent' });
+    it('reports absent evidence distinctly from a rejected key, and never as resolved', () => {
+        for (const settingsCiphertext of [null, '', '   ']) {
+            const resolution = classifyAccountLinkKeyFamily({ payload: dataKeyBytes, settingsCiphertext });
+            expect(resolution).toEqual({ resolved: false, reason: 'account_evidence_absent' });
+            // Distinct cause, same disposition: absent evidence is a refusal, not a default.
+            expect(resolution.resolved).toBe(false);
+        }
     });
 
     it('refuses a payload length it cannot classify', () => {

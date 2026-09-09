@@ -1241,6 +1241,8 @@ export const de: TranslationStructure = {
         openMachine: 'Rechner öffnen',
         terminalUrlPlaceholder: 'happier://terminal?...',
         accountUrlPlaceholder: 'happier:///account?...',
+        accountLinkKeyFamilyUnverifiedTitle: 'Verschlüsselungsschlüssel dieses Kontos kann nicht überprüft werden',
+        accountLinkKeyFamilyUnverifiedBody: 'Dieses Gerät konnte nicht bestätigen, welchen Verschlüsselungsschlüssel das Konto verwendet, und hat abgebrochen, statt einen möglicherweise falschen Schlüssel zu speichern. Öffne Einstellungen → Konto auf dem bereits angemeldeten Gerät, warte bis die Synchronisierung fertig ist, und scanne erneut.',
         restoreQrInstructions: "Geh auf einem bereits angemeldeten Gerät zu Einstellungen → Konto und scanne diesen QR-Code.",
         externalAuthVerifiedTitle: ({ provider }: { provider: string }) => `${provider} verifiziert`,
         externalAuthVerifiedBody: ({ provider }: { provider: string }) =>

@@ -8,10 +8,11 @@ export const ACCOUNT_LINK_KEY_BYTES = 32;
 export type AccountLinkKeyFamily = 'legacy' | 'dataKey';
 
 /**
- * `account_evidence_absent` is deliberately distinct from the two rejections. "The account publishes
- * no encrypted blob to test against" is not the same claim as "these bytes authenticate against no
- * key family", and the two must not share a disposition: refusing the first would newly break
- * pairing for accounts that link successfully today, while accepting the second would guess.
+ * `account_evidence_absent` names a distinct *cause* — the account published no readable encrypted
+ * settings envelope to test against — but it is not a licence to proceed. Absence of one encrypted
+ * settings envelope does not establish that encrypted machines, sessions, or other account-scoped
+ * records are absent, and it says nothing about the family future writes will be sealed under. Every
+ * reason in this union is therefore a refusal: none of them may produce storable credentials.
  */
 export type AccountLinkKeyFamilyFailureReason =
     | 'unsupported_payload_length'
@@ -42,6 +43,12 @@ export type AccountLinkKeyFamilyResolution =
  * `dataKey`, `SHA-512(deriveKey(secret, 'Happy EnCoder', ['content']))[0..32]` for `legacy` — so an
  * authenticated secretbox open under each candidate is a cryptographic family proof. It is
  * read-only and one-time, and runs before any credential is stored or any write is initialized.
+ *
+ * Proof is required, never assumed. If no candidate is proven — including when the account exposes
+ * no readable encrypted settings at all — the transfer is refused rather than resolved to a default.
+ * A blank or plain account is not evidence that the account holds nothing encrypted, and it cannot
+ * predict the family of later writes, so storing a guessed credential there would reintroduce the
+ * exact silent wrong-key divergence this discriminator exists to prevent.
  */
 export function encodeAccountLinkPayload(credentials: AuthCredentials): Uint8Array {
     if (isLegacyAuthCredentials(credentials)) {

@@ -60,16 +60,21 @@ export async function fetchAccountSettingsCiphertext(token: string): Promise<str
  * families, fails closed; no key is ever guessed, reinterpreted, or replaced with freshly generated
  * material.
  *
- * When the account publishes no encrypted blob at all there is nothing to prove a family against
- * and nothing yet encrypted to misread. Refusing there would newly break pairing for accounts that
- * link successfully today, so this preserves the exact released interpretation (legacy) instead.
- * That is the shipped behavior, unchanged — not a new guess — and it is reported to the caller.
+ * An unproven family always fails closed, including when the account exposes no readable encrypted
+ * settings. That absence is not proof that the account holds no other encrypted material, and it
+ * does not fix the family of future writes, so a credential stored on that basis could still be the
+ * wrong key. This is a deliberate compatibility limitation: an account with no readable encrypted
+ * settings cannot complete an account-link transfer through this path, and must use a flow that
+ * establishes its key family directly. Refusing to link is recoverable; persisting the wrong key is
+ * silent and is not.
+ *
+ * Callers receive a typed `AccountLinkKeyFamilyError`. Nothing is persisted, no writer is started
+ * and no account state is mutated on any failure path.
  */
 export async function resolveAccountLinkCredentials(params: Readonly<{
     token: string;
     payload: Uint8Array;
     fetchSettingsCiphertext?: (token: string) => Promise<string | null>;
-    onUnverifiedFamily?: (reason: 'account_evidence_absent') => void;
 }>): Promise<AuthCredentials> {
     const fetchCiphertext = params.fetchSettingsCiphertext ?? fetchAccountSettingsCiphertext;
     const settingsCiphertext = await fetchCiphertext(params.token);
@@ -80,15 +85,7 @@ export async function resolveAccountLinkCredentials(params: Readonly<{
     });
 
     if (!resolution.resolved) {
-        if (resolution.reason !== 'account_evidence_absent') {
-            throw new AccountLinkKeyFamilyError(resolution.reason);
-        }
-        params.onUnverifiedFamily?.('account_evidence_absent');
-        return buildCredentialsForAccountLinkKeyFamily({
-            token: params.token,
-            payload: params.payload,
-            family: 'legacy',
-        });
+        throw new AccountLinkKeyFamilyError(resolution.reason);
     }
 
     return buildCredentialsForAccountLinkKeyFamily({
