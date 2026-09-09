@@ -1270,6 +1270,12 @@ Post-restart verification checked the full active payload again.
 | `previous` | `versions/0.2.11-local-final2` | Unchanged |
 | `previous-before-task-complete-fix` | `versions/0.2.11-local-final3` | Unchanged |
 
+This table describes the earlier `0.2.11-cuihui-spawn-compat-r1` activation
+only. The `previous` row is historical: `previous` was later repaired to point
+at `versions/0.2.11-cuihui-spawn-compat-r1` and is no longer
+`0.2.11-local-final2`. See "Product-initiated rollback bookkeeping (corrected
+after the rollout)" below for the current state.
+
 The supported owning command was `happier service restart`, not
 `happier daemon service restart`; the helper previewed the service plan and
 then used `/Users/cuihuiai/.happier/bin/happier service restart`. It did not
