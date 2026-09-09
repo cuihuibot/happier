@@ -3,9 +3,12 @@
 This checkout keeps Cuihui-specific Happier changes in `cuihuibot/happier`
 without proposing or pushing them to `happier-dev/happier`.
 
-The maintained behavior, regression commands, deployment procedure, and
-rollback record are documented in
+The maintained behavior, compatibility limits, and regression commands are
+documented in
 [Cuihui Happier customizations](cuihui-customizations.md).
+Environment configuration, rollout records, acceptance status, and recovery
+procedures belong in an operator-controlled deployment repository; see
+[Repository boundary for custom deployments](repository-boundary.md).
 
 ## Repository model
 
@@ -16,8 +19,8 @@ rollback record are documented in
 | `custom/cuihui` | Long-lived customization branch and fork default | Allowed to `origin` only |
 | `upstream/dev` | Upstream integration baseline | Fetch and merge only |
 
-The local checkout is `/Users/cuihui/Work/happier`. Git is configured with
-`remote.pushDefault=origin`, and the `upstream` push URL is `DISABLED`.
+Configure each local checkout with `remote.pushDefault=origin` and disable the
+`upstream` push URL.
 
 ## Clone the customization repository
 
@@ -51,7 +54,7 @@ without merging it yourself.
 ```bash
 git fetch origin
 git switch -c fix/<short-description> origin/custom/cuihui
-# implement, then run the regression commands in cuihui-customizations.md
+# implement, then run the relevant documented regression commands
 git push -u origin fix/<short-description>
 gh pr create --repo cuihuibot/happier --base custom/cuihui --head fix/<short-description>
 ```
@@ -62,9 +65,10 @@ Verify the acting GitHub identity before any remote write:
 gh api user --jq .login   # must print: cuihuibot
 ```
 
-Record the maintained behavior in
-[Cuihui Happier customizations](cuihui-customizations.md) in the same branch,
-including its regression commands, live acceptance steps, and rollback path.
+Record reusable behavior, compatibility limits, and regression guidance in
+[Cuihui Happier customizations](cuihui-customizations.md) in the same branch.
+Record environment-specific acceptance, rollout, artifact, and rollback facts
+in the deployment repository without adding secrets or raw operational data.
 
 ## Sync changes from upstream
 
@@ -102,7 +106,7 @@ Before removing a customization, verify that the equivalent behavior exists in
 the fetched upstream source and passes the same regression and live acceptance
 tests. Remove the local change only after that verification.
 
-## Recover the remote configuration
+## Recover repository remotes
 
 If remote names or push policies drift:
 
