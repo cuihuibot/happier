@@ -30,6 +30,11 @@ import { createStartupMetadataOverrides } from '@/agent/runtime/createStartupMet
 import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendApiContext';
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
 import { registerRunnerTerminationHandlers } from '@/agent/runtime/runnerTerminationHandlers';
+import {
+  DEFAULT_RUNNER_ABORT_INTENT,
+  isStrongerRunnerAbortIntent,
+  type RunnerAbortIntent,
+} from '@/agent/runtime/runnerAbortIntent';
 import { runPermissionModePromptLoop, type ReadyNotificationTurnContext } from '@/agent/runtime/runPermissionModePromptLoop';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
 import { resolveReadyNotificationAssistantText } from '@/agent/runtime/readyNotificationAssistantText';
@@ -79,7 +84,7 @@ type RuntimeForLoop = {
   flushTurn: () => void | Promise<void>;
   reset: () => Promise<void>;
   getSessionId: () => string | null;
-  cancel: () => Promise<void>;
+  cancel: (options?: Readonly<{ intent?: RunnerAbortIntent }>) => Promise<void>;
   setSessionMode: (modeId: string) => Promise<void>;
   setSessionConfigOption: (configId: string, value: string | number | boolean | null) => Promise<void>;
   setSessionModel: (modelId: string) => Promise<void>;
@@ -382,7 +387,8 @@ export async function runStandardAcpProvider(
       if (!runtime) {
         throw new Error('active-turn cancellation is not available');
       }
-      await runtime.cancel();
+      // In-flight steer cancellation is the user abandoning the current turn.
+      await runtime.cancel({ intent: 'explicit-cancel' });
     },
   };
 
@@ -419,7 +425,8 @@ export async function runStandardAcpProvider(
       logPath: process.env.DEBUG ? logger.getLogPath() : undefined,
       onExit: async () => {
         shouldExit = true;
-        await handleAbort();
+        // The user closed the terminal UI. That stops this process; it does not abandon the work.
+        await handleAbort('shutdown');
       },
     }), { exitOnCtrlC: false, patchConsole: false });
   };
@@ -440,6 +447,9 @@ export async function runStandardAcpProvider(
   let thinking = false;
   let shouldExit = false;
   let abortController = new AbortController();
+  // Set while an explicit abort is running so the prompt loop can wait for it instead of
+  // spinning on a signal that is already aborted.
+  let abortSettledSignal: Promise<void> | null = null;
   const getKeepAliveMode = (): KeepAliveMode => config.resolveKeepAliveMode?.() ?? 'remote';
   let lastKeepAliveSentAt = 0;
   let lastKeepAliveSignature: string | null = null;
@@ -534,6 +544,8 @@ export async function runStandardAcpProvider(
 
   let cleanupPromise: Promise<void> | null = null;
   let explicitAbortPromise: Promise<void> | null = null;
+  // Why the in-flight abort was started, so a later stronger intent can escalate past it.
+  let explicitAbortIntent: RunnerAbortIntent = DEFAULT_RUNNER_ABORT_INTENT;
   let providerInputDispatchDrain: Promise<void> | null = null;
   const closeProviderInputAdmission = (): Promise<void> => {
     providerInputDispatchDrain ??= providerInputConsumer.closeProviderInputAdmissionAndWaitForDispatches();
@@ -577,15 +589,42 @@ export async function runStandardAcpProvider(
     return cleanupPromise;
   };
 
-  const handleAbort = (): Promise<void> => {
-    if (explicitAbortPromise) return explicitAbortPromise;
+  const handleAbort = (
+    intent: RunnerAbortIntent = DEFAULT_RUNNER_ABORT_INTENT,
+  ): Promise<void> => {
+    if (explicitAbortPromise) {
+      // De-duplication must not swallow a stronger intent. A shutdown already in flight has
+      // cancelled the turn but deliberately left the work resumable; an explicit cancellation
+      // arriving behind it still has to reach the runtime, or the user's cancellation is lost.
+      if (!isStrongerRunnerAbortIntent(intent, explicitAbortIntent)) return explicitAbortPromise;
+      const inFlight = explicitAbortPromise;
+      explicitAbortIntent = intent;
+      const escalation = (async () => {
+        await inFlight.catch(() => {});
+        logger.debug(`${config.uiLogPrefix} Escalating an in-flight shutdown to an explicit cancellation`);
+        try {
+          await runtime.cancel({ intent });
+        } catch (error) {
+          logger.debug(`${config.uiLogPrefix} Failed to escalate cancellation (non-fatal)`, error);
+        }
+      })();
+      explicitAbortPromise = escalation;
+      abortSettledSignal = escalation;
+      const clearEscalation = (): void => {
+        if (explicitAbortPromise === escalation) explicitAbortPromise = null;
+        if (abortSettledSignal === escalation) abortSettledSignal = null;
+      };
+      void escalation.then(clearEscalation, clearEscalation);
+      return escalation;
+    }
+    explicitAbortIntent = intent;
     const operation = (async () => {
-      logger.debug(`${config.uiLogPrefix} Abort requested`);
+      logger.debug(`${config.uiLogPrefix} Abort requested (intent=${intent})`);
       await permissionHandler.abortPendingRequestsAndFlush('Aborted by user');
       session.sendAgentMessage(config.agentMessageType, { type: 'turn_aborted', id: randomUUID() });
       abortController.abort();
       try {
-        await runtime.cancel();
+        await runtime.cancel({ intent });
       } catch (error) {
         logger.debug(`${config.uiLogPrefix} Failed to cancel current operation (non-fatal)`, error);
       } finally {
@@ -593,13 +632,16 @@ export async function runStandardAcpProvider(
       }
     })();
     explicitAbortPromise = operation;
+    abortSettledSignal = operation;
     const clearExplicitAbort = (): void => {
       if (explicitAbortPromise === operation) explicitAbortPromise = null;
+      if (abortSettledSignal === operation) abortSettledSignal = null;
     };
     void operation.then(clearExplicitAbort, clearExplicitAbort);
     return operation;
   };
-  abortRequestedCallback = handleAbort;
+  // An `abort` permission decision is the user explicitly abandoning the turn, not a shutdown.
+  abortRequestedCallback = () => handleAbort('explicit-cancel');
 
   const terminationHandlers = registerRunnerTerminationHandlers({
     process,
@@ -611,7 +653,10 @@ export async function runStandardAcpProvider(
     },
     onTerminate: async () => {
       shouldExit = true;
-      await handleAbort();
+      // A signal, a kill-session request or a crash. The runtime stops, but the session must stay
+      // resumable: nobody asked for the provider's work to be abandoned. `happier session stop`
+      // arrives here as SIGTERM, which is why this must not be treated as a cancellation.
+      await handleAbort('shutdown');
       // A terminated runtime leaves the Session inactive, never archived: archiving is a
       // user-intent action owned by setSessionArchivedState. cleanupOnce closes the API
       // session so the Session projection becomes inactive and stays resumable.
@@ -625,7 +670,9 @@ export async function runStandardAcpProvider(
     await terminationHandlers.whenTerminated;
   };
 
-  session.rpcHandlerManager.registerHandler('abort', handleAbort);
+  // The intent is fixed here, at the registration site. The RPC payload is deliberately ignored so
+  // a remote caller cannot downgrade an explicit cancellation into a shutdown.
+  session.rpcHandlerManager.registerHandler('abort', () => handleAbort('explicit-cancel'));
   registerKillSessionHandlerFn(session.rpcHandlerManager, handleKillSession);
 
   const sendReady = config.createSendReady
@@ -699,6 +746,9 @@ export async function runStandardAcpProvider(
       messageBuffer,
       shouldExit: () => shouldExit,
       getAbortSignal: () => abortController.signal,
+      waitForAbortSettled: async () => {
+        await abortSettledSignal?.catch(() => undefined);
+      },
       keepAlive: sendKeepAlive,
       setThinking: setThinkingState,
       sendReady,

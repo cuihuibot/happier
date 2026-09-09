@@ -1399,3 +1399,154 @@ describe('runStandardAcpProvider', () => {
     expect(observedGetAccountSettingsSecretsReadKeys?.()).toEqual(settingsSecretsReadKeys);
   });
 });
+
+/**
+ * Every abort path in this runner converges on one `handleAbort` helper, so the *reason* for the
+ * abort only survives if each registration site states it. That distinction is load-bearing: a
+ * backend that can permanently abandon provider-side work uses it to tell a user cancellation
+ * ("throw this away") apart from a process shutdown ("stop, but stay resumable").
+ *
+ * These tests drive the real registration sites — the `abort` RPC handler, the kill-session
+ * handler and the permission handler's abort callback — rather than calling `handleAbort`
+ * directly, because the whole defect class here is a call site that forgets to pass its intent.
+ */
+describe('runStandardAcpProvider abort intent', () => {
+  const cancelIntents = (runtime: { cancel: ReturnType<typeof vi.fn> }): unknown[] =>
+    runtime.cancel.mock.calls.map((call: readonly unknown[]) =>
+      (call[0] as { intent?: unknown } | undefined)?.intent);
+
+  it('reports an explicit cancellation when the abort RPC is invoked', async () => {
+    const harness = createHarness();
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      const abort = harness.handlers.get('abort');
+      expect(abort).toBeTypeOf('function');
+      await abort?.({});
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(cancelIntents(harness.runtime)).toEqual(['explicit-cancel']);
+  });
+
+  // `happier session stop` reaches the runner as SIGTERM, and a kill-session request reaches the
+  // same termination handler. Neither means "abandon the work", so neither may claim to.
+  it('reports a shutdown when the session is terminated rather than cancelled', async () => {
+    const harness = createHarness();
+    harness.opts.startedBy = 'daemon';
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      await harness.metrics.killHandler?.();
+    };
+
+    try {
+      await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    expect(cancelIntents(harness.runtime)).toEqual(['shutdown']);
+  });
+
+  // An `abort` permission decision is the user declining and abandoning the turn.
+  it('reports an explicit cancellation when a permission decision aborts the turn', async () => {
+    const harness = createHarness();
+    let onAbortRequested: (() => void | Promise<void>) | null = null;
+    harness.deps.createProviderEnforcedPermissionHandlerFn = (params: any) => {
+      onAbortRequested = params.onAbortRequested ?? null;
+      return {
+        setPermissionMode: () => undefined,
+        abortPendingRequestsAndFlush: async () => undefined,
+        reset: () => undefined,
+        updateSession: () => undefined,
+      };
+    };
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      expect(onAbortRequested).toBeTypeOf('function');
+      await onAbortRequested?.();
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(cancelIntents(harness.runtime)).toEqual(['explicit-cancel']);
+  });
+
+  // Aborts are de-duplicated while one is in flight. A user cancelling *while* the process is
+  // already shutting down must not be swallowed by that de-duplication: the shutdown deliberately
+  // leaves the work resumable, so losing the cancellation would leave the abandoned work alive.
+  it('escalates to an explicit cancellation when a cancel races in behind a shutdown', async () => {
+    const harness = createHarness();
+    harness.opts.startedBy = 'daemon';
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let releaseShutdownCancel!: () => void;
+    const shutdownCancelBlocked = new Promise<void>((resolve) => {
+      releaseShutdownCancel = resolve;
+    });
+    let sawFirstCancel!: () => void;
+    const firstCancelStarted = new Promise<void>((resolve) => {
+      sawFirstCancel = resolve;
+    });
+    let first = true;
+    harness.runtime.cancel = vi.fn(async () => {
+      if (!first) return;
+      first = false;
+      sawFirstCancel();
+      await shutdownCancelBlocked;
+    });
+
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      const shutdown = Promise.resolve(harness.metrics.killHandler?.());
+      await firstCancelStarted;
+      // The cancellation arrives while the shutdown's own cancel is still in flight.
+      const cancelled = Promise.resolve(harness.handlers.get('abort')?.({}));
+      releaseShutdownCancel();
+      await Promise.all([shutdown, cancelled]);
+    };
+
+    try {
+      await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    expect(cancelIntents(harness.runtime)).toEqual(['shutdown', 'explicit-cancel']);
+  });
+
+  // The reverse race must NOT escalate: a shutdown arriving behind a cancellation is weaker, and
+  // re-running it would only add noise. The cancellation already abandoned the work.
+  it('does not downgrade or repeat when a shutdown races in behind an explicit cancel', async () => {
+    const harness = createHarness();
+    harness.opts.startedBy = 'daemon';
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let releaseCancel!: () => void;
+    const cancelBlocked = new Promise<void>((resolve) => {
+      releaseCancel = resolve;
+    });
+    let sawFirstCancel!: () => void;
+    const firstCancelStarted = new Promise<void>((resolve) => {
+      sawFirstCancel = resolve;
+    });
+    let first = true;
+    harness.runtime.cancel = vi.fn(async () => {
+      if (!first) return;
+      first = false;
+      sawFirstCancel();
+      await cancelBlocked;
+    });
+
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      const cancelled = Promise.resolve(harness.handlers.get('abort')?.({}));
+      await firstCancelStarted;
+      const shutdown = Promise.resolve(harness.metrics.killHandler?.());
+      releaseCancel();
+      await Promise.all([cancelled, shutdown]);
+    };
+
+    try {
+      await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    expect(cancelIntents(harness.runtime)).toEqual(['explicit-cancel']);
+  });
+});

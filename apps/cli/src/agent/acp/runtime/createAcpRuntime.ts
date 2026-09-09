@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { logger } from '@/ui/logger';
 import type { AgentBackend, AgentMessage, McpServerConfig } from '@/agent';
@@ -8,8 +8,10 @@ import {
   AcpPromptSubmissionPhaseError,
   type AcpPermissionHandler,
   type AcpPromptSubmissionEvidence,
+  type AcpRetiredProviderSession,
   type SessionConfigOption,
 } from '@/agent/acp/AcpBackend';
+import type { RunnerAbortIntent } from '@/agent/runtime/runnerAbortIntent';
 import type { AcpTurnOutcome } from '@/agent/acp/backend/turn/_types';
 import type { MessageBuffer } from '@/ui/ink/messageBuffer';
 import {
@@ -96,6 +98,38 @@ const ACP_FAILURE_TRACE_ENV = 'HAPPIER_ACP_FAILURE_TRACE';
 type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
 type RuntimeSessionMediaSource = RuntimeSessionMediaMessage['media'][number];
 type RuntimeSessionMediaPersistResult = SessionMediaPersistResult;
+
+/**
+ * Stable transcript identity for a projected `task_complete` summary row.
+ *
+ * Derived from the provider tool-call id alone: a genuine retry replays the same call id and
+ * must reuse the same row identity, while a later turn carries a new call id and gets its own
+ * row. Nothing is derived from wall-clock time or row ordering.
+ */
+function taskCompleteSummaryLocalId(callId: string): string {
+  const digest = createHash('sha256')
+    .update(`acp-task-complete-summary\u0000${callId}`)
+    .digest('hex');
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    `5${digest.slice(13, 16)}`,
+    ((Number.parseInt(digest.slice(16, 17), 16) & 0x3) | 0x8).toString(16) + digest.slice(17, 20),
+    digest.slice(20, 32),
+  ].join('-');
+}
+
+/** True when a tool result reports failure, so its summary is not a successful answer. */
+function isFailedToolResult(result: unknown): boolean {
+  const record = asRecord(result);
+  if (!record) return false;
+  for (const key of ['is_error', 'isError', 'error', 'failed']) {
+    const value = record[key];
+    if (value === true) return true;
+    if (typeof value === 'string' && value.trim().length > 0) return true;
+  }
+  return false;
+}
 
 function readTaskCompleteSummary(msg: Extract<AgentMessage, { type: 'tool-call' }>): string | null {
   const args = asRecord(msg.args);
@@ -271,6 +305,13 @@ function stringifySessionConfigOptionValue(value: string | number | boolean | nu
 
 export type AcpRuntime = Readonly<{
   getSessionId: () => string | null;
+  /** True only once the provider connection was force-closed and must be reopened. */
+  isProviderConnectionForceClosed: () => boolean;
+  /**
+   * True only once resuming the current provider session would resurrect cancelled work, so the
+   * recovery must open a fresh provider session instead of loading the old one.
+   */
+  isProviderSessionResumePoisoned: () => boolean;
   /**
    * Whether this runtime supports "steering" additional user input into an already running turn.
    */
@@ -280,7 +321,20 @@ export type AcpRuntime = Readonly<{
    */
   isTurnInFlight: () => boolean;
   beginTurn: () => void;
-  cancel: () => Promise<void>;
+  /**
+   * Settle any in-flight provider-autonomous continuation projection.
+   *
+   * Copilot's autopilot mode keeps working after `session/prompt` resolves; that continuation
+   * is projected as its own turn outside the client prompt loop, so shutdown and test paths
+   * need an explicit join point.
+   */
+  waitForAutonomousContinuationIdle: () => Promise<void>;
+  /**
+   * Close an open provider-autonomous continuation and persist its transcript before the
+   * caller takes ownership of runtime turn state.
+   */
+  settleAutonomousContinuation: () => Promise<void>;
+  cancel: (options?: Readonly<{ intent?: RunnerAbortIntent }>) => Promise<void>;
   reset: () => Promise<void>;
   startOrLoad: (opts: { resumeId?: string | null; importHistory?: boolean; deferPendingDrain?: boolean }) => Promise<string>;
   /**
@@ -339,6 +393,15 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
     payload: AgentPromptPayload,
   ) => Promise<AcpPromptSubmissionEvidence>;
   /**
+   * True only once the bounded cancellation fallback closed an unresponsive provider process.
+   */
+  isProviderConnectionForceClosed?: () => boolean;
+  /**
+   * True only once a cancellation retired the connection while the provider still owned
+   * uncancellable autonomous work, so its session must not be resumed.
+   */
+  isProviderSessionResumePoisoned?: () => boolean;
+  /**
    * Optional provider-native ACP session mode change (e.g. "plan" vs "code").
    */
   setSessionMode?: (sessionId: string, modeId: string) => Promise<void>;
@@ -365,6 +428,10 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
   ) => Promise<AcpPromptSubmissionEvidence>;
   setPlanStatePublisher?: (
     publisher: (snapshot: NormalizedAcpPlanSnapshot) => Promise<void>,
+  ) => void;
+  /** Register the owner of a provider session that cancellation had to retire. */
+  setProviderSessionRetirementHandler?: (
+    handler: (retired: AcpRetiredProviderSession) => Promise<void>,
   ) => void;
 };
 
@@ -597,10 +664,27 @@ export function createAcpRuntime(params: {
   let isResponseInProgress = false;
   let taskStartedSent = false;
   let taskCompleteSummaryFallback: string | null = null;
+  let taskCompleteSummaryCallId: string | null = null;
+  /**
+   * `task_complete` summaries already published as their own transcript row, keyed by the
+   * durable row identity. Guarantees exactly-once projection across segments and retries.
+   */
+  const publishedTaskCompleteSummaryLocalIds = new Set<string>();
   let turnAborted = false;
   let pendingTurnOutcome: AcpTurnOutcome | null = null;
   let loadingSession = false;
   let turnInFlight = false;
+  /**
+   * Provider-autonomous continuation projection state.
+   *
+   * The backend opens a bounded continuation generation when a provider keeps working after
+   * `session/prompt` already resolved. The runtime projects that generation as its own
+   * transcript turn so continuation output is persisted instead of being attributed to the
+   * finished client turn or dropped entirely.
+   */
+  let autonomousContinuationInFlight = false;
+  let autonomousContinuationTail: Promise<void> = Promise.resolve();
+  let runtimeRef: AcpRuntime | null = null;
   let currentTurnId: string | null = null;
   let turnMediaGeneration = 0;
   let startOrLoadFlight: Readonly<{ intentKey: string; promise: Promise<string> }> | null = null;
@@ -680,6 +764,46 @@ export function createAcpRuntime(params: {
   const confirmVendorSessionDurable = params.sessionIdentity.kind === 'persist-bound'
     ? params.sessionIdentity.confirmVendorSessionDurable ?? null
     : null;
+
+  const invalidateVendorSessionResume = params.sessionIdentity.kind === 'persist-bound'
+    ? params.sessionIdentity.invalidateBound ?? null
+    : null;
+
+  /**
+   * Handle a provider session the backend had to retire because cancellation could not stop
+   * its autonomous work.
+   *
+   * Two things must survive the current process. The durable resume projection has to go, or a
+   * later cold start is spawned with `--resume <retired id>` and hands the cancelled goal back
+   * to the provider, which re-runs it as new autonomous work. And the user has to be able to
+   * see, in the transcript itself, that the next turn starts from a fresh provider context —
+   * a terminal-only status line is lost with the process that printed it.
+   *
+   * Failures propagate to the caller: reporting a completed cancellation while a resumable
+   * pointer to the cancelled work is still on disk would be reporting a state that is not real.
+   */
+  const handleProviderSessionRetired = async (retired: Readonly<{
+    vendorSessionId: string;
+    reason: 'cancelled-uncancellable-work';
+  }>): Promise<void> => {
+    const vendorSessionId = readNonBlankOpaqueIdentifier(retired.vendorSessionId) ?? '';
+    if (vendorSessionId && invalidateVendorSessionResume) {
+      await invalidateVendorSessionResume(vendorSessionId);
+    }
+    // Opaque provider identifiers stay out of the user-visible notice and out of the log line.
+    logger.debug(`[${params.provider}] Invalidated the durable resume projection for a retired provider session`);
+    try {
+      params.session.sendSessionEvent?.({
+        type: 'message',
+        message: 'Cancelled. The agent could not stop its background work, so this session was '
+          + 'disconnected from it and the next message starts a fresh agent context. Earlier '
+          + 'messages above are unchanged, but the agent will not remember them.',
+      });
+    } catch (error) {
+      // The durable invalidation is the safety property; the notice is an explanation of it.
+      logger.debug(`[${params.provider}] Failed to publish the retired-session notice (non-fatal)`, error);
+    }
+  };
 
   /**
    * A turn that reached its end boundary is the point at which an Agent that
@@ -859,6 +983,7 @@ export function createAcpRuntime(params: {
     isResponseInProgress = false;
     taskStartedSent = false;
     taskCompleteSummaryFallback = null;
+    taskCompleteSummaryCallId = null;
     turnAborted = false;
     pendingTurnOutcome = null;
     currentTurnId = null;
@@ -1318,6 +1443,109 @@ export function createAcpRuntime(params: {
     publishProviderSessionInfo(pending.update, pending.observedAt);
   };
 
+  /**
+   * Translate how the backend closed a continuation segment into the runtime turn outcome.
+   *
+   * Only the provider's own correlated `task_complete` is a successful completion. An
+   * inactivity safety timeout, a cancellation, a superseding client prompt, a backend failure
+   * and a disposal are all interruptions: they must be projected through the existing
+   * non-completed outcome path so the transcript records an explicitly incomplete turn instead
+   * of fabricating `task_complete`. Returning `null` means "successful completion".
+   */
+  const resolveAutonomousContinuationTurnOutcome = (
+    payload: Record<string, unknown> | null,
+  ): AcpTurnOutcome | null => {
+    const outcome = typeof payload?.outcome === 'string' ? payload.outcome : null;
+    const reason = typeof payload?.reason === 'string' ? payload.reason : 'unknown';
+    switch (outcome) {
+      case 'completed':
+        return null;
+      case 'cancelled':
+        return { kind: 'aborted', stopReason: 'cancelled' };
+      case 'failed':
+        return { kind: 'failed', error: new Error(`autonomous continuation ended: ${reason}`) };
+      case 'timed_out': {
+        const capMs = typeof payload?.stallMs === 'number' ? payload.stallMs : 0;
+        return { kind: 'timed_out', capMs };
+      }
+      case 'limit_exceeded':
+        // The configured continuation budget truncated the autonomous run. The segment still
+        // carries whatever the provider produced; the turn is reported incomplete so the user
+        // can see that the run was cut short rather than silently losing the tail.
+        return {
+          kind: 'failed',
+          error: new Error(
+            'autonomous continuation stopped: the provider continued past the configured '
+            + 'continuation limit for this turn, so the run was truncated',
+          ),
+        };
+      default:
+        // An unknown or missing outcome must never be assumed successful.
+        return { kind: 'failed', error: new Error(`autonomous continuation ended: ${reason}`) };
+    }
+  };
+
+  /**
+   * Flush the runtime turn that is currently projecting a provider-autonomous continuation.
+   *
+   * `outcome` is recorded before the flush so the existing turn-boundary logic publishes the
+   * incomplete markers and skips `task_complete` and `recordSessionTurnCompleted`. Text that
+   * the provider already produced is still persisted by the interrupted transcript flush.
+   */
+  const flushAutonomousContinuationTurn = async (outcome: AcpTurnOutcome | null): Promise<void> => {
+    const runtime = runtimeRef;
+    if (!runtime) return;
+    if (outcome) {
+      logger.debug(
+        `[${params.provider}] Projecting provider-autonomous continuation as an incomplete turn (${outcome.kind})`,
+      );
+      rememberTurnOutcome(outcome);
+    }
+    await runtime.flushTurn();
+  };
+
+  /**
+   * Project a provider-owned autonomous continuation as its own transcript turn.
+   *
+   * Running the continuation as a discrete turn (rather than reopening the finished one)
+   * keeps every existing invariant: the previous turn's completion is already published and
+   * durable, the continuation gets a fresh provider turn id, and the maintained
+   * `task_complete` summary fallback applies per segment, so a stage-two summary is still
+   * persisted after a stage-one commentary turn without duplicating either row.
+   */
+  const handleAutonomousContinuationMessage = (msg: AgentMessage): boolean => {
+    if (msg.type !== 'event' || msg.name !== 'autonomous_continuation') return false;
+    const payload = asRecord(msg.payload);
+    const phase = typeof payload?.phase === 'string' ? payload.phase : '';
+    const runtime = runtimeRef;
+    if (!runtime) return true;
+
+    if (phase === 'started') {
+      // A client-owned turn always keeps ownership of its own output.
+      if (turnInFlight || loadingSession || autonomousContinuationInFlight) return true;
+      autonomousContinuationInFlight = true;
+      logger.debug(`[${params.provider}] Projecting provider-autonomous continuation as a new turn`);
+      runtime.beginTurn();
+      return true;
+    }
+
+    if (phase === 'ended') {
+      if (!autonomousContinuationInFlight) return true;
+      autonomousContinuationInFlight = false;
+      const outcome = resolveAutonomousContinuationTurnOutcome(payload);
+      // Serialize continuation flushes so overlapping provider segments cannot interleave
+      // transcript writes with each other.
+      autonomousContinuationTail = autonomousContinuationTail
+        .then(() => flushAutonomousContinuationTurn(outcome))
+        .catch((error) => {
+          logger.debug(`[${params.provider}] Failed to flush autonomous continuation turn`, error);
+        });
+      return true;
+    }
+
+    return true;
+  };
+
   const attachMessageHandler = (b: AcpRuntimeBackend) => {
     messageForwarder?.dispose();
     const handlerGeneration = runtimeMetadataPublicationGeneration;
@@ -1348,6 +1576,7 @@ export function createAcpRuntime(params: {
     b.onMessage((msg: AgentMessage) => {
       if (handlerGeneration !== runtimeMetadataPublicationGeneration) return;
       if (handleProviderSessionInfoMessage(msg)) return;
+      if (handleAutonomousContinuationMessage(msg)) return;
       if (loadingSession) {
         if (msg.type === 'status' && msg.status === 'error') {
           turnAborted = true;
@@ -1479,7 +1708,13 @@ export function createAcpRuntime(params: {
             break;
           }
 
-          taskCompleteSummaryFallback = readTaskCompleteSummary(msg) ?? taskCompleteSummaryFallback;
+          {
+            const summary = readTaskCompleteSummary(msg);
+            if (summary !== null) {
+              taskCompleteSummaryFallback = summary;
+              taskCompleteSummaryCallId = msg.callId;
+            }
+          }
 
           accumulatedAssistantSegmentResponse = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
@@ -1508,6 +1743,11 @@ export function createAcpRuntime(params: {
               ? msg.result
               : JSON.stringify(msg.result ?? '').slice(0, 200);
             params.messageBuffer.addMessage(`Result: ${outputText}`, 'result');
+          }
+          if (taskCompleteSummaryCallId !== null && callId === taskCompleteSummaryCallId && isFailedToolResult(msg.result)) {
+            // A failed or refused `task_complete` is not a successful answer.
+            taskCompleteSummaryFallback = null;
+            taskCompleteSummaryCallId = null;
           }
           forwardToolResultWithMedia(msg, (next) => forwarder.forward(next));
 
@@ -1918,6 +2158,7 @@ export function createAcpRuntime(params: {
           }) as typeof metadata
         )));
       });
+      created.setProviderSessionRetirementHandler?.(handleProviderSessionRetired);
       backend = created;
       attachMessageHandler(created);
       logger.debug(`[${params.provider}] ACP backend created`);
@@ -2210,8 +2451,18 @@ export function createAcpRuntime(params: {
     }
   };
 
-  return {
+  return runtimeRef = {
     getSessionId: () => sessionId,
+
+    isProviderConnectionForceClosed(): boolean {
+      if (!sessionId) return false;
+      return backend?.isProviderConnectionForceClosed?.() === true;
+    },
+
+    isProviderSessionResumePoisoned(): boolean {
+      if (!sessionId) return false;
+      return backend?.isProviderSessionResumePoisoned?.() === true;
+    },
     supportsInFlightSteer: () => inFlightSteerEnabled,
     isTurnInFlight: () => turnInFlight,
 
@@ -2237,7 +2488,7 @@ export function createAcpRuntime(params: {
       }
     },
 
-    async cancel(): Promise<void> {
+    async cancel(options?: Readonly<{ intent?: RunnerAbortIntent }>): Promise<void> {
       if (!sessionId) return;
       if (turnInFlight) {
         turnAborted = true;
@@ -2245,7 +2496,7 @@ export function createAcpRuntime(params: {
       await streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'cancelled' });
       const b = await ensureBackend();
       try {
-        await b.cancel(sessionId);
+        await b.cancel(sessionId, options);
       } finally {
         await abortPendingAcpPermissionRequests(params.permissionHandler, 'ACP runtime cancelled', (error) => {
           logger.debug(`[${params.provider}] Failed to abort pending permission requests after cancel`, error);
@@ -2618,6 +2869,29 @@ export function createAcpRuntime(params: {
           { localId: assistantRootSegment?.localId ?? randomUUID() },
         );
       }
+      // A provider that narrates first and then finishes with `task_complete` used to lose its
+      // final summary: the stream segment was already claimed by the commentary, so the
+      // existing empty-response fallback above never ran. Publish the summary as its own
+      // durable row instead of appending to (or overwriting) the commentary segment.
+      if (
+        !turnAborted
+        && (!pendingTurnOutcome || pendingTurnOutcome.kind === 'completed')
+        && !taskCompleteSummaryForDurableFallback
+        && taskCompleteSummaryFallback
+        && taskCompleteSummaryCallId
+      ) {
+        const summary = taskCompleteSummaryFallback;
+        const alreadyVisible = accumulatedResponse.includes(summary.trim());
+        const localId = taskCompleteSummaryLocalId(taskCompleteSummaryCallId);
+        if (!alreadyVisible && !publishedTaskCompleteSummaryLocalIds.has(localId)) {
+          publishedTaskCompleteSummaryLocalIds.add(localId);
+          await params.session.sendAgentMessageCommitted(
+            params.provider,
+            { type: 'message', message: summary },
+            { localId },
+          );
+        }
+      }
       await abortPendingAcpPermissionRequests(
         params.permissionHandler,
         turnAborted ? 'ACP runtime turn aborted' : 'ACP runtime turn ended',
@@ -2703,6 +2977,37 @@ export function createAcpRuntime(params: {
 
       clearToolCallCache();
       resetTurnState();
+    },
+
+    /**
+     * Settle any in-flight provider-autonomous continuation projection.
+     *
+     * Exposed so tests and shutdown paths can await the continuation transcript flush that
+     * the provider, not the client prompt loop, initiated.
+     */
+    async waitForAutonomousContinuationIdle(): Promise<void> {
+      await autonomousContinuationTail;
+    },
+
+    /**
+     * Close an open autonomous continuation and persist its transcript before the caller
+     * takes ownership of the runtime turn state.
+     *
+     * The client prompt loop calls this before `beginTurn()`; without it a new prompt would
+     * reset turn state while continuation output was still unflushed.
+     */
+    async settleAutonomousContinuation(): Promise<void> {
+      if (autonomousContinuationInFlight) {
+        autonomousContinuationInFlight = false;
+        // A new client prompt interrupts the provider's autonomous run. The interrupted
+        // segment must not be reported as a successful completion.
+        autonomousContinuationTail = autonomousContinuationTail
+          .then(() => flushAutonomousContinuationTurn({ kind: 'aborted', stopReason: 'cancelled' }))
+          .catch((error) => {
+            logger.debug(`[${params.provider}] Failed to flush autonomous continuation turn`, error);
+          });
+      }
+      await autonomousContinuationTail;
     },
   };
 }
