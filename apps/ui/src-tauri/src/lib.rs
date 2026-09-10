@@ -16,6 +16,12 @@ mod window_chrome;
 #[cfg(desktop)]
 mod startup;
 
+#[cfg(desktop)]
+mod os_open;
+
+#[cfg(desktop)]
+pub mod external_links;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -72,6 +78,11 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
+                // The main window is created here rather than by configuration so the
+                // external-link new-window handler can be installed while its webview is built.
+                // It must come first: chrome, tray and pet-overlay registration all resolve the
+                // main window by label and silently do nothing when it is missing.
+                external_links::create_main_window(app)?;
                 autostart::register(app)?;
                 tray::register(app)?;
                 pet_overlay::register(app)?;

@@ -82,6 +82,66 @@ fn stable_preview_and_publicdev_configs_use_integrated_main_window_chrome() {
 }
 
 #[test]
+fn every_config_hands_main_window_creation_to_rust_without_losing_window_configuration() {
+    for config_name in [
+        "tauri.conf.json",
+        "tauri.preview.conf.json",
+        "tauri.publicdev.conf.json",
+    ] {
+        let config = read_tauri_config(config_name);
+        let raw_window = config["app"]["windows"]
+            .as_array()
+            .and_then(|windows| windows.first())
+            .unwrap_or_else(|| panic!("{config_name} should declare a main window"))
+            .clone();
+
+        assert_eq!(
+            raw_window["create"], false,
+            "{config_name} must opt out of automatic window creation so the Rust setup owns \
+             main-window creation and can install the external-link new-window handler"
+        );
+
+        // Deserializing through the real Tauri type proves the runtime sees the same
+        // configuration that `WebviewWindowBuilder::from_config` will consume, so the
+        // window is reused rather than duplicated or silently reduced.
+        let window: tauri::utils::config::WindowConfig = serde_json::from_value(raw_window)
+            .unwrap_or_else(|error| {
+                panic!("{config_name} main window should parse as a Tauri WindowConfig: {error}")
+            });
+
+        assert!(
+            !window.create,
+            "{config_name} WindowConfig::create should be false"
+        );
+        assert_eq!(
+            window.label, "main",
+            "{config_name} must keep the main window label the chrome, tray and pet-overlay \
+             lifecycle code resolves"
+        );
+        assert!(
+            !window.visible,
+            "{config_name} should keep the main window initially hidden"
+        );
+        assert!(
+            window.decorations,
+            "{config_name} should keep native window decorations"
+        );
+        assert!(
+            window.hidden_title,
+            "{config_name} should keep the native title text hidden"
+        );
+        assert!(
+            !window.drag_drop_enabled,
+            "{config_name} should keep webview drag-and-drop disabled"
+        );
+        assert!(
+            window.resizable,
+            "{config_name} should keep the main window resizable"
+        );
+    }
+}
+
+#[test]
 fn stable_and_publicdev_configs_preserve_pet_overlay_capability() {
     for config_name in ["tauri.conf.json", "tauri.publicdev.conf.json"] {
         let config = read_tauri_config(config_name);

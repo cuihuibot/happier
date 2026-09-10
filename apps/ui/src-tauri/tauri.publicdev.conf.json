@@ -22,6 +22,8 @@
     "windows": [
       {
         "title": "Happier (dev)",
+        "label": "main",
+        "create": false,
         "width": 800,
         "height": 600,
         "visible": false,
