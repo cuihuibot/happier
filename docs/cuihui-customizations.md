@@ -389,6 +389,52 @@ this experiment, no per-user or per-account scoping, and no entry in the
 canonical feature catalog. Do not describe the experiment as a user-facing
 setting.
 
+### Persistent daemon operator route (current release source)
+
+The current release source adds a persisted operator route for the background
+service. This is a newer source basis than candidate `952e5a6b`; do not read it
+back into that candidate.
+
+- Use an installed Happier binary that already includes the
+  `service copilot-sdk-experiment` command and the service-definition refresh
+  logic. This route lives in the Happier CLI binary that manages the service.
+- Enable the flight with
+  `happier service copilot-sdk-experiment enable --cli-path <absolute-native-Copilot-executable>`.
+  The command persists the setting and requires a non-empty absolute path. It
+  does **not** prove that the file exists or that the executable is usable; path
+  syntax and runtime usability are distinct checks.
+- `happier service copilot-sdk-experiment status` reports the **saved**
+  configuration from settings. It is not proof that a running daemon has already
+  reloaded that configuration.
+- Apply a saved enable or disable with `happier service restart`. For the
+  installed background service, this is the authoritative re-apply step. On
+  macOS, restart compares the installed launchd plist to the expected template
+  generated from current settings and rewrites the definition before lifecycle
+  commands when it has drifted; it is not just a `kickstart` of a stale
+  definition.
+- Disable with `happier service copilot-sdk-experiment disable`, then run
+  `happier service restart`. This returns **new unbound** Copilot sessions
+  launched by this machine's background service to ACP while retaining the
+  native Copilot CLI path needed to reopen sessions that are already bound to
+  the SDK backend.
+- A never-configured service stays on the ACP default. Existing ACP sessions are
+  not migrated. Scope is this machine's daemon-launched **new Copilot sessions**
+  only; this is not a per-user, per-account, or mobile-device toggle.
+- The supported rollback here keeps the SDK-capable Happier binary in place and
+  clears only the new-session opt-in. Do **not** recommend downgrading to a
+  pre-SDK Happier binary after SDK sessions exist as though affinity or native
+  resume were preserved.
+- Do **not** use `happier daemon restart --restart-session-runners`,
+  `happier daemon restart --kill-sessions`, or
+  `happier daemon stop --kill-sessions` for this toggle. Those are separate
+  manual-daemon controls, not the background-service configuration apply path.
+
+Current source basis for this operator route: `apps/cli/src/cli/commands/service.ts:5,10-14`,
+`apps/cli/src/cli/commands/serviceCopilotSdkExperiment.ts:11-13,25-31,54-85`,
+`apps/cli/src/settings/copilotSdkExperimentSettings.ts:45-66,77-80,108-136`,
+`apps/cli/src/daemon/service/cli.ts:1774-1785,1915-1917`,
+`apps/cli/src/cli/commands/daemon.ts:82-90`.
+
 ### Observing which backend a session selected
 
 - The resolved selection is logged as
