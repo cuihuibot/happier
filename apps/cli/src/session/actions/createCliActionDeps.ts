@@ -8,6 +8,7 @@ import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SessionUsageLimitRecoveryV1Schema,
   buildStructuredQuestionAnswerPayload,
+  normalizePendingDeliveryBlockedReason,
   type ActionExecutorDeps,
   type BackendTargetRefV1,
   type FeatureId,
@@ -63,7 +64,10 @@ import {
   ensureSessionRuntimeForPendingInput,
   requestInactiveSessionResume,
 } from '@/session/services/requestInactiveSessionResume';
-import { sendSessionMessage } from '@/session/services/sendSessionMessage';
+import {
+  formatBlockedPromptDeliveryFailure,
+  sendSessionMessage,
+} from '@/session/services/sendSessionMessage';
 import { setSessionArchivedState } from '@/session/services/setSessionArchivedState';
 import { setSessionModel } from '@/session/services/setSessionModel';
 import { setSessionMode } from '@/session/services/setSessionMode';
@@ -1653,10 +1657,20 @@ export function createCliActionDeps(params: Readonly<{
             : {}),
       });
       if (!res.ok) {
+        // `error` is the string the public CLI serializes as `error.message`.
+        // Only a reason that round-trips the closed, deliberately public blocked
+        // vocabulary may widen it; anything absent, unknown, malformed or
+        // attacker-shaped keeps the pre-existing generic code, and the service
+        // `message` is never forwarded because it can carry provider prose.
+        const publishableBlockedReason = normalizePendingDeliveryBlockedReason(
+          (res as Readonly<Record<string, unknown>>).blockedDeliveryReason,
+        );
         return {
           ok: false,
           errorCode: res.code,
-          error: res.code,
+          error: publishableBlockedReason
+            ? formatBlockedPromptDeliveryFailure(publishableBlockedReason)
+            : res.code,
           ...(res.candidates ? { candidates: res.candidates } : {}),
           ...(res.message ? { message: res.message } : {}),
         };
