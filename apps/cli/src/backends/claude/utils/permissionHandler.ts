@@ -14,6 +14,7 @@ import type { EnhancedMode, PermissionMode } from "../loop";
 import { getToolDescriptor } from "./getToolDescriptor";
 import { delay } from "@/utils/time";
 import { recordToolTraceEvent } from '@/agent/tools/trace/toolTrace';
+import { flushSessionWithinAbortBudget } from '@/session/services/sessionAbortFlush';
 import { extractAgentIdFromTaskResultText } from '@/backends/claude/remote/sidechains/extractAgentIdFromTaskResult';
 import { resolveClaudeSdkPermissionModeFromEnhancedMode } from '@/backends/claude/utils/permissionMode';
 import { syncClaudePermissionModeFromMetadata } from '@/backends/claude/utils/syncPermissionModeFromMetadata';
@@ -976,7 +977,13 @@ export class PermissionHandler {
     async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {
         this.cancelPendingRequests(reason, 'abort_pending_requests', { decision: 'abort' });
         try {
-            await this.session.client.flush?.();
+            const client = this.session.client;
+            await flushSessionWithinAbortBudget({
+                owner: client,
+                flush: client.flush ? () => client.flush() : undefined,
+                logPrefix: '[Claude]',
+                reason,
+            });
         } catch (error) {
             logger.debug('[Claude] Failed to flush session after aborting pending permissions (non-fatal)', error);
         }

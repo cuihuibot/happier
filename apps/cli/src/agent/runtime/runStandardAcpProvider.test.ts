@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildBackendTargetKey } from '@happier-dev/protocol';
 
 import { runStandardAcpProvider, type StandardAcpProviderConfig, type StandardAcpProviderRunOptions } from './runStandardAcpProvider';
+import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/createProviderEnforcedPermissionHandler';
+import { SESSION_ABORT_ACK_CONTRACT_MS, SESSION_ABORT_FLUSH_BUDGET_MS } from '@/session/transport/shared/sessionTimeouts';
 
 /**
  * Observes the Session itself rather than any single archive helper: every archive
@@ -1063,6 +1065,39 @@ describe('runStandardAcpProvider', () => {
     expect(harness.metrics.permissionResetCalls).toBe(0);
     expect(sessionWasArchived(harness.session)).toBe(false);
   });
+
+  /**
+   * B18 corridor at the public boundary: the registered `abort` RPC promise is what the UI awaits
+   * under its 30,000 ms encrypted-abort ack contract. This uses the REAL provider-enforced
+   * permission handler (not the harness stub) against a session whose best-effort write drain
+   * never settles, on the real clock at the production budget, so it fails if the bound is removed
+   * from the corridor owner. Final cleanup spends its own budget interval after the aborting turn.
+   */
+  it('settles the public abort RPC and reaches native cancel when session writes never drain', async () => {
+    const harness = createHarness();
+    harness.session.flush = vi.fn(() => new Promise<void>(() => undefined));
+    harness.deps.createProviderEnforcedPermissionHandlerFn = createProviderEnforcedPermissionHandler as any;
+
+    let abortAckMs = Number.NaN;
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      const abort = harness.handlers.get('abort');
+      expect(abort).toBeTypeOf('function');
+      const startedAt = Date.now();
+      await abort?.();
+      abortAckMs = Date.now() - startedAt;
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(Number.isNaN(abortAckMs)).toBe(false);
+    expect(abortAckMs).toBeGreaterThanOrEqual(SESSION_ABORT_FLUSH_BUDGET_MS);
+    expect(abortAckMs).toBeLessThan(SESSION_ABORT_ACK_CONTRACT_MS);
+    expect(harness.session.sendAgentMessage).toHaveBeenCalledWith(
+      'qwen',
+      expect.objectContaining({ type: 'turn_aborted' }),
+    );
+    expect(harness.runtime.cancel).toHaveBeenCalledTimes(1);
+  }, 45_000);
 
   it('keeps final cleanup idempotent after abort cancels pending permissions', async () => {
     const harness = createHarness();

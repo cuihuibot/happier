@@ -17,6 +17,7 @@ import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
 import { configuration } from '@/configuration';
 import { isAgentNativeResumeIdentityMismatchError } from '@/session/agentTransition/agentNativeReturn';
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers';
+import { delay } from '@/utils/time';
 import { readPendingLocalId } from '@happier-dev/protocol';
 import { readNewestSessionModelsMetadataStateV1 } from '@happier-dev/agents';
 import {

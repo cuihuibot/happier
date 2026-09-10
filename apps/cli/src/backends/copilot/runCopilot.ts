@@ -12,7 +12,7 @@ import { formatProviderPromptErrorMessage } from '@/agent/runtime/formatProvider
 import { runStandardAcpProvider, type StandardAcpProviderRunOptions } from '@/agent/runtime/runStandardAcpProvider';
 
 import { CopilotTerminalDisplay } from '@/backends/copilot/ui/CopilotTerminalDisplay';
-import { createCopilotAcpRuntime } from '@/backends/copilot/acp/runtime';
+import { createCopilotRuntime } from '@/backends/copilot/runtimeFactory';
 
 export async function runCopilot(opts: StandardAcpProviderRunOptions & {
   credentials: Credentials;
@@ -28,7 +28,7 @@ export async function runCopilot(opts: StandardAcpProviderRunOptions & {
     machineMetadata: initialMachineMetadata,
     terminalDisplay: CopilotTerminalDisplay,
     resolveRuntimeDirectory: ({ session, metadata }) => session.getMetadataSnapshot()?.path ?? metadata.path,
-    createRuntime: ({ directory, machineId, session, messageBuffer, mcpServers, permissionHandler, setThinking, getPermissionMode, memoryRecallGuidanceEnabled, processEnv, pendingQueueDrainMaxPopPerWake, providerInputConsumer }) => createCopilotAcpRuntime({
+    createRuntime: ({ directory, machineId, session, messageBuffer, mcpServers, permissionHandler, setThinking, getPermissionMode, memoryRecallGuidanceEnabled, processEnv, pendingQueueDrainMaxPopPerWake, providerInputConsumer, sessionLaunchOrigin }) => createCopilotRuntime({
       directory,
       machineId,
       session,
@@ -41,6 +41,9 @@ export async function runCopilot(opts: StandardAcpProviderRunOptions & {
       processEnv,
       pendingQueueDrainMaxPopPerWake,
       providerInputConsumer,
+      // The authoritative server resolution decides SDK vs ACP for a fresh
+      // session. Dropping it here silently forced every launch onto ACP.
+      sessionLaunchOrigin,
     }),
     onAttachMetadataSnapshotMissing: (error) => {
       logger.debug(
