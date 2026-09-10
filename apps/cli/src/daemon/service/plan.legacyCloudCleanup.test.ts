@@ -21,6 +21,7 @@ describe('daemon service plan legacy cloud cleanup', () => {
       ...baseInstallParams,
       targetMode: 'default-following',
       instanceId: 'company',
+      copilotSdkExperiment: null,
     });
 
     expect(
@@ -39,6 +40,7 @@ describe('daemon service plan legacy cloud cleanup', () => {
       ...baseInstallParams,
       targetMode: 'default-following',
       instanceId: 'cloud',
+      copilotSdkExperiment: null,
     });
 
     expect(

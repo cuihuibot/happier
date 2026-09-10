@@ -17,6 +17,7 @@ describe('daemon service legacy cleanup planning', () => {
       publicServerUrl: 'http://localhost:24910',
       nodePath: '/home/tester/.happier/cli/current/happier',
       entryPath: '/home/tester/.happier/cli/current/happier',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.commands).toContainEqual({
@@ -108,6 +109,7 @@ describe('daemon service legacy cleanup planning', () => {
       publicServerUrl: 'http://localhost:24910',
       nodePath: 'C:\\Users\\tester\\.happier\\cli\\current\\happier.exe',
       entryPath: 'C:\\Users\\tester\\.happier\\cli\\current\\happier.exe',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.commands).toContainEqual({

@@ -79,6 +79,7 @@ describe('resolveDaemonServiceListEntries', () => {
         nodePath: defaultShimPath,
         entryPath: '',
         uid: runtime.uid,
+        copilotSdkExperiment: null,
       });
 
       const expectedServicePath = expectedPlan.files[0]?.path ?? '';
@@ -140,6 +141,7 @@ describe('resolveDaemonServiceListEntries', () => {
         nodePath: runtime.nodePath,
         entryPath: runtime.entryPath,
         uid: runtime.uid,
+        copilotSdkExperiment: null,
       });
 
       const plannedFile = expectedPlan.files[0];
@@ -230,6 +232,7 @@ describe('resolveDaemonServiceListEntries', () => {
         nodePath: runtime.nodePath,
         entryPath: runtime.entryPath,
         uid: undefined,
+        copilotSdkExperiment: null,
       });
 
       const expectedServicePath = expectedPlan.files[0]?.path ?? '';

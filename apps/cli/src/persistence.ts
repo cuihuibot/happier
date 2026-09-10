@@ -187,6 +187,14 @@ export interface Settings {
    * Parsed/normalized by `settings/memorySettings.ts`.
    */
   memory?: unknown
+
+  /**
+   * Device-local, experimental Copilot SDK flight opt-in (stored as an opaque
+   * JSON payload). Parsed/validated by `settings/copilotSdkExperimentSettings.ts`,
+   * which is the canonical owner and the only producer of the allowlisted
+   * `HAPPIER_COPILOT_SDK_*` service environment keys.
+   */
+  copilotSdkExperiment?: unknown
 }
 
 const defaultSettings: Settings = {

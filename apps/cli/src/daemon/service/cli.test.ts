@@ -1533,6 +1533,7 @@ describe('runDaemonServiceCliCommand', () => {
         publicServerUrl: runtime.publicServerUrl,
         nodePath: runtime.nodePath,
         entryPath: runtime.entryPath,
+        copilotSdkExperiment: null,
       });
       writeFileSync(paths.installedPath, expectedPlan.files[0]?.content ?? '', 'utf-8');
       await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(1), token: 'token-default-following-wrong-relay' });
@@ -1619,6 +1620,7 @@ describe('runDaemonServiceCliCommand', () => {
         publicServerUrl: runtime.publicServerUrl,
         nodePath: runtime.nodePath,
         entryPath: runtime.entryPath,
+        copilotSdkExperiment: null,
       });
       writeFileSync(paths.installedPath, expectedInstallPlan.files[0]?.content ?? '', 'utf-8');
 
@@ -2223,6 +2225,7 @@ describe('runDaemonServiceCliCommand', () => {
         publicServerUrl: runtime.publicServerUrl,
         nodePath: installRuntimeTarget.nodePath,
         entryPath: installRuntimeTarget.entryPath,
+        copilotSdkExperiment: null,
       });
       writeFileSync(paths.installedPath, expectedInstallPlan.files[0]?.content ?? '', 'utf-8');
 
@@ -2518,6 +2521,7 @@ describe('runDaemonServiceCliCommand', () => {
         publicServerUrl: runtime.publicServerUrl,
         nodePath: installRuntimeTarget.nodePath,
         entryPath: installRuntimeTarget.entryPath,
+        copilotSdkExperiment: null,
       });
       writeFileSync(paths.installedPath, expectedInstallPlan.files[0]?.content ?? '', 'utf-8');
 

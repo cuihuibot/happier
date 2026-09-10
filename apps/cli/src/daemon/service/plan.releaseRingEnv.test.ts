@@ -17,6 +17,7 @@ describe('daemon service plan release ring env', () => {
       publicServerUrl: 'https://api.example.test',
       nodePath: '/usr/bin/node',
       entryPath: '/opt/happier/package-dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files[0]?.content ?? '').toContain('HAPPIER_PUBLIC_RELEASE_CHANNEL=dev');

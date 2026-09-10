@@ -53,6 +53,7 @@ function buildForeignPinnedServiceFile(params: Readonly<{
         nodePath: process.execPath,
         entryPath: '/tmp/happier-entry.mjs',
         uid: currentUidOrNull() ?? undefined,
+        copilotSdkExperiment: null,
     });
     const serviceFile = plan.files[0];
     if (!serviceFile) {

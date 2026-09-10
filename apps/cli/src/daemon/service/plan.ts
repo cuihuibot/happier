@@ -2,6 +2,10 @@ import { basename, join, win32 as win32Path } from 'node:path';
 
 import { getReleaseRingCatalogEntry, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { isServerIdFilesystemSafe } from '@/server/serverId';
+import {
+  buildCopilotSdkExperimentServiceEnv,
+  type CopilotSdkExperimentSettings,
+} from '@/settings/copilotSdkExperimentSettings';
 
 import { buildLaunchAgentPlistXml, buildLaunchdPath } from './darwin';
 import { buildServicePath, planServiceAction, renderSystemdServiceUnit, renderWindowsScheduledTaskWrapperPs1 } from '@happier-dev/cli-common/service';
@@ -254,6 +258,13 @@ export function planDaemonServiceInstall(params: Readonly<{
   nodePath: string;
   entryPath: string;
   uid?: number;
+  /**
+   * Persisted experimental Copilot SDK flight, or `null` when no flight is
+   * configured. Required so that every generator of a service definition
+   * (installer, expected-definition comparison and start/restart drift
+   * refresh) derives the same environment and cannot silently erase it.
+   */
+  copilotSdkExperiment: CopilotSdkExperimentSettings | null;
 }>): DaemonServiceInstallPlan {
   const instanceId = sanitizeServiceInstanceId(params.instanceId);
   const channel: PublicReleaseRingId = params.channel ?? 'stable';
@@ -283,6 +294,7 @@ export function planDaemonServiceInstall(params: Readonly<{
     HAPPIER_NO_BROWSER_OPEN: '1',
     HAPPIER_DAEMON_WAIT_FOR_AUTH: '1',
     HAPPIER_DAEMON_WAIT_FOR_AUTH_TIMEOUT_MS: '0',
+    ...buildCopilotSdkExperimentServiceEnv(params.copilotSdkExperiment),
   };
   const pinnedTargetEnv: Record<string, string> = targetMode === 'default-following'
     ? {}
