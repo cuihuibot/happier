@@ -477,6 +477,10 @@ export function createCopilotSdkBackend(params: CopilotSdkBackendParams) {
     // here left the host blocked until its own bound expired.
     if (event.type === 'session.error') {
       const message = typeof data.message === 'string' ? data.message : 'native session error';
+      // The canonical owner sanitizes this to the fixed preview "Provider
+      // session failed", so without a default-on report here a failed turn is
+      // indistinguishable from any other provider failure in production.
+      logger.warn(`[copilot-sdk] native session error: ${message}`);
       recordTurnOutcome({
         kind: 'failed',
         error: new Error(`Copilot SDK backend: native session error: ${message}`),

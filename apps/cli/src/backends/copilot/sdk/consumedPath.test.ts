@@ -464,6 +464,32 @@ describe('copilot SDK backend fault, settlement and permission boundaries', () =
     expect(afterError).toBe('failure');
   });
 
+  // A terminal native failure is the ONLY thing that explains a turn ending as
+  // `provider_session_error`, yet nothing on the consumed path records it: this
+  // branch merely stores the error on the turn outcome, and the canonical owner
+  // sanitizes it to the fixed preview "Provider session failed" without logging
+  // the detail at any level. An installed acceptance run therefore produced a
+  // failed turn whose cause could not be recovered from any signal. The native
+  // message must be reported on a default-on signal.
+  it('D3: a native session error is reported on a default-on signal', async () => {
+    const { logger } = await import('@/ui/logger');
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    try {
+      const b = backend();
+      await b.startSession();
+      emit('session.error', { message: 'SPIKE-native-failure-detail' });
+      await tick();
+
+      const reported = warn.mock.calls
+        .map((call) => call.map((part) => String(part)).join(' '))
+        .filter((line) => line.includes('SPIKE-native-failure-detail'));
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toContain('[copilot-sdk]');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('CONTROL: a normal non-autopilot idle still settles the turn successfully', async () => {
     const b = backend();
     await b.startSession();
