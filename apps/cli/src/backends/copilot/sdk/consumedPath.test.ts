@@ -493,6 +493,26 @@ describe('copilot SDK backend fault, settlement and permission boundaries', () =
     expect(wire.stop).toHaveBeenCalledTimes(2);
   });
 
+  // D4/reconciliation: the shared ACP runtime owner must not hand out a fresh
+  // backend while the previous native runtime's termination is unproved. The
+  // SDK backend reports an unverified shutdown by failing dispose(), so this
+  // pins the shared owner's response to it: the reset is reported as failed,
+  // ownership is retained, and the replacement startup is refused rather than
+  // silently succeeding on top of a process that may still be alive.
+  it('D4: an unproved termination blocks replacement startup at the shared runtime owner', async () => {
+    const c = composition();
+    await c.runtime.startOrLoad({});
+
+    wire.stop.mockResolvedValue([new Error('SPIKE-native-stop-failed')]);
+    await expect(c.runtime.reset()).rejects.toThrow(/cleanup|reset/i);
+
+    // Even with a healthy native transport, the runtime must refuse to start a
+    // replacement until the unproved shutdown is resolved.
+    wire.create.mockClear();
+    await expect(c.runtime.startOrLoad({})).rejects.toThrow(/cannot start a new backend/i);
+    expect(wire.create).not.toHaveBeenCalled();
+  });
+
   // D5: approve-once must not be reused across distinct native requests.
   it('D5: distinct native permission requests each need their own host approval', async () => {
     const requests: string[] = [];
