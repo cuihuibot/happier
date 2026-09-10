@@ -44,7 +44,7 @@ describe('happier service copilot-sdk-experiment', () => {
     const { readSettings } = await import('@/persistence');
     const { readCopilotSdkExperimentSettings } = await import('@/settings/copilotSdkExperimentSettings');
     expect(readCopilotSdkExperimentSettings(await readSettings())).toEqual({
-      enabled: true,
+      newSessionOptIn: true,
       cliPath: '/usr/local/bin/copilot',
     });
   });
@@ -61,7 +61,7 @@ describe('happier service copilot-sdk-experiment', () => {
     expect(readCopilotSdkExperimentSettings(await readSettings())).toBeNull();
   });
 
-  it('disables the flight and returns new sessions to the ACP default', async () => {
+  it('disables new-session opt-in but retains the path so existing SDK sessions still resume', async () => {
     const { handleServiceCopilotSdkExperimentCliCommand } = await import('./serviceCopilotSdkExperiment');
     await handleServiceCopilotSdkExperimentCliCommand({
       argv: ['copilot-sdk-experiment', 'enable', '--cli-path', '/usr/local/bin/copilot'],
@@ -71,7 +71,10 @@ describe('happier service copilot-sdk-experiment', () => {
 
     const { readSettings } = await import('@/persistence');
     const { readCopilotSdkExperimentSettings } = await import('@/settings/copilotSdkExperimentSettings');
-    expect(readCopilotSdkExperimentSettings(await readSettings())).toBeNull();
+    expect(readCopilotSdkExperimentSettings(await readSettings())).toEqual({
+      newSessionOptIn: false,
+      cliPath: '/usr/local/bin/copilot',
+    });
   });
 
   it('states that the flight is host-wide and needs a service re-apply to take effect', async () => {
