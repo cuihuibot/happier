@@ -25,6 +25,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://api.happier.dev',
       nodePath: '/opt/homebrew/bin/node',
       entryPath: '/usr/local/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
@@ -69,6 +70,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://api.happier.dev',
       nodePath: '/opt/homebrew/bin/node',
       entryPath: '/usr/local/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     const enableIndex = plan.commands.findIndex((command) =>
@@ -98,6 +100,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://api.happier.dev',
       nodePath: '/opt/homebrew/bin/node',
       entryPath: '/usr/local/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
@@ -120,6 +123,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'http://localhost:53510',
       nodePath: '/opt/homebrew/bin/node',
       entryPath: '/usr/local/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files[0]?.path).toBe(
@@ -147,6 +151,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://api.happier.dev',
       nodePath: '/usr/bin/node',
       entryPath: '/usr/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
@@ -190,6 +195,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://company.example.test',
       nodePath: '/usr/bin/node',
       entryPath: '/usr/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
@@ -220,6 +226,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://api.happier.dev',
       nodePath: '/usr/bin/node',
       entryPath: '/usr/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
@@ -284,6 +291,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'http://127.0.0.1:3005',
       nodePath: '/usr/local/bin/happier',
       entryPath: '',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
@@ -320,6 +328,7 @@ describe('daemon service install plan', () => {
         publicServerUrl: 'http://127.0.0.1:3005',
         nodePath: '/usr/local/bin/happier',
         entryPath: '',
+        copilotSdkExperiment: null,
       }),
     ).toThrow('systemUser is required');
   });
@@ -337,6 +346,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://api.happier.dev',
       nodePath: '/opt/Node With Spaces/bin/node',
       entryPath: '/home/test/Library/Application Support/Happier/dist/index.mjs',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
@@ -357,6 +367,7 @@ describe('daemon service install plan', () => {
       serverUrl: 'https://company.example.test',
       webappUrl: 'https://app.company.example.test',
       publicServerUrl: 'https://company.example.test',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files[0]?.path).toBe('/home/test/.config/systemd/user/happier-daemon.company.service');
@@ -376,6 +387,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://api.happier.dev',
       nodePath: 'C:\\\\Users\\\\test\\\\.local\\\\bin\\\\happier.exe',
       entryPath: '',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
@@ -402,6 +414,7 @@ describe('daemon service install plan', () => {
       publicServerUrl: 'https://api.happier.dev',
       nodePath: 'C:\\\\Users\\\\test\\\\.local\\\\bin\\\\happier.exe',
       entryPath: '',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files).toHaveLength(1);
