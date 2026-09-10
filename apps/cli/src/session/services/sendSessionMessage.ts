@@ -53,7 +53,21 @@ export type SendSessionMessageResult =
        */
       code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'session_archived' | 'unsupported' | 'resume_failed' | 'timeout' | 'wait_failed';
       candidates?: string[];
+      /**
+       * Operator-facing detail. It may legitimately carry provider prose (for
+       * example a runtime issue preview), so it is NOT safe to publish verbatim
+       * on a public envelope. Use `blockedDeliveryReason` for that.
+       */
       message?: string;
+      /**
+       * The typed, closed-vocabulary reason a pending delivery was blocked.
+       *
+       * Separate from `message` on purpose: this is the only part of a
+       * `wait_failed` failure that is deliberately public. A wait-path exception
+       * carries no reason, which is what keeps exception text out of the public
+       * envelope.
+       */
+      blockedDeliveryReason?: PendingQueueDeliveryBlockedReason;
     }>;
 
 function parsePermissionIntentOrThrow(raw: string): PermissionIntent {
@@ -286,7 +300,13 @@ type CurrentPromptDeliveryOutcome =
 
 const CURRENT_PROMPT_DELIVERY_POLL_MS = 250;
 
-function formatBlockedPromptDeliveryFailure(reason: PendingQueueDeliveryBlockedReason): string {
+/**
+ * Canonical, deliberately public rendering of a blocked pending delivery.
+ *
+ * Exported so the CLI action seam can rebuild exactly this string from the
+ * typed reason instead of forwarding an arbitrary service message.
+ */
+export function formatBlockedPromptDeliveryFailure(reason: PendingQueueDeliveryBlockedReason): string {
   return `Current turn failed: pending delivery blocked (${reason})`;
 }
 
@@ -575,6 +595,7 @@ export async function sendSessionMessage(params: Readonly<{
       return {
         ok: false,
         code: 'wait_failed',
+        blockedDeliveryReason: promptDelivery.reason,
         message: formatBlockedPromptDeliveryFailure(promptDelivery.reason),
       };
     }

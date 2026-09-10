@@ -458,6 +458,7 @@ describe('sendSessionMessage', () => {
         })).resolves.toEqual({
             ok: false,
             code: 'wait_failed',
+            blockedDeliveryReason: 'runtime_disposed_before_delivery',
             message: expect.stringContaining('runtime_disposed_before_delivery'),
         });
 
