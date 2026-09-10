@@ -128,6 +128,23 @@ describe('happier session send: blocked pending-delivery diagnostics', () => {
     expect(JSON.stringify(parsed)).not.toContain(SENTINEL);
   });
 
+  it('does not publish the "unknown" catch-all as an authoritative reason', async () => {
+    // The upstream projection parser normalizes any unrecognized server reason
+    // to 'unknown', so disclosing it would dress an unparsed value up as a
+    // diagnosis. The outer built-CLI scenario caught this; the composed unit
+    // path did not, because the normalization happens before the service.
+    sendSessionMessage.mockResolvedValueOnce({
+      ok: false,
+      code: 'wait_failed',
+      blockedDeliveryReason: 'unknown',
+    });
+
+    const parsed = await runSend();
+
+    expect(parsed.error?.code).toBe('wait_failed');
+    expect(parsed.error?.message).toBe('wait_failed');
+  });
+
   it('never forwards free provider prose carried on the service message', async () => {
     // `message` legitimately carries provider prose for other wait_failed
     // producers (runtime issue previews). It must not become public here.
