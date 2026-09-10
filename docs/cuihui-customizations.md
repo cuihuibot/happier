@@ -294,6 +294,199 @@ artifact availability, exact pins, observed pointer state, and an independently
 validated recovery procedure. Public product documentation does not claim that
 any environment is rollback-ready.
 
+## Experimental Copilot SDK runtime (opt-in)
+
+Verified on September 10, 2026 against candidate
+`952e5a6bec06f7006a51c4ce3867cc342e8f3475` (tree `8720128714`), which is **not
+merged into this branch**. This branch (`1ffa5f044c`) contains no SDK runtime.
+Everything below describes that candidate so operators can read the same rules
+the code enforces; it is not a statement that the candidate is released,
+independently reviewed, or at parity with ACP.
+
+### What this is, and what it is not
+
+Copilot runs on ACP by default. The candidate adds a second, experimental
+Copilot transport (the Copilot SDK runtime) that a host operator can opt into
+for **newly created** sessions only. It is a narrow experiment:
+
+- It is **not** SDK/ACP feature parity, and no parity claim is made anywhere.
+- It is **not** provider readiness evidence. Better diagnostics are not proof
+  that a provider works.
+- Author-side engineering evidence on the exact candidate: typecheck exit 0,
+  production build (`yarn workspace @happier-dev/cli build`) exit 0, and 291/291
+  targeted regressions. That is exact-candidate engineering evidence, not live
+  parity or a passed gate.
+- Two failures in `apps/cli/src/session/actions` remain and are disclosed rather
+  than fixed: `temporary-throttle retry-now` and
+  `delegate run defaults above the caller permission`. Both reproduce with the
+  candidate's changes stashed, so they are not unique to it — but no root cause
+  is established.
+- Live acceptance criteria SDK-AC-02..07 and AC-12 require live provider/device
+  work that was not authorized and are **not** marked passed.
+- Independent live-safety review and independent documentation review were
+  pending when this section was written.
+
+### Operator prerequisites
+
+| Variable | Required | Effect |
+| --- | --- | --- |
+| `HAPPIER_COPILOT_SDK_EXPERIMENT` | yes, to opt in | Exactly `1` or `true` opts in. Every other value, including empty, `0` and `false`, means ACP. |
+| `HAPPIER_COPILOT_SDK_CLI_PATH` | yes, whenever the SDK runtime is selected | Binds the installed Copilot CLI. If it is missing the SDK launch **throws**; there is no fallback to ACP. |
+| `HAPPIER_COPILOT_SDK_MODEL` | no | Model override passed to the SDK runtime. |
+| `HAPPIER_COPILOT_SDK_CONFIG_DIR` | no | Configuration directory for the native runtime. |
+| `HAPPIER_COPILOT_SDK_MAX_CREDITS` | no | Positive integer; rejected loudly if it is not. |
+| `HAPPIER_COPILOT_SDK_MAX_MODEL_CALLS` | no | A soft, post-request observational stop for bounded runs. It cannot cancel an in-flight call, bound concurrency, or keep a cap current. It is not an enforcement control. |
+| `HAPPIER_COPILOT_SDK_USAGE_SINK` | no | Path for durable sanitized usage accounting. Default off. |
+
+### How a runtime is selected
+
+Precedence is fixed and fail-closed. Durable affinity outranks the flag, so a
+session never changes transport underneath itself.
+
+| Durable backend affinity | Launch origin / opt-in | Result |
+| --- | --- | --- |
+| Recorded `sdk` | any origin, flag on or off | SDK |
+| Recorded `acp` | any origin, flag on or off | ACP (the reader accepts this value; see the note below) |
+| Recorded but unreadable | any | Launch is **refused** (`copilot_backend_identity_unreadable`); it never guesses |
+| None recorded | authoritatively created **and** opted in | SDK |
+| None recorded | existing, unknown, or not opted in | ACP, with a diagnostic when an opt-in could not be honored |
+
+Consequences worth stating plainly:
+
+- Only a session the server reports as authoritatively **created** can opt in.
+  A missing spawn nonce, session flavor, vendor id, or attachment state is not
+  evidence of creation.
+- An older server that omits the origin discriminator, and the attach path,
+  yield `unknown`. That is an explicit ACP outcome with a logged explanation,
+  never a silent SDK selection.
+- There is no silent runtime fallback in either direction: a selected runtime
+  that does not match the runtime actually constructed raises instead of
+  degrading.
+- Affinity is persisted at the moment the native session binds, not at
+  construction, so a session that never started successfully is not durably
+  pinned to the experimental runtime.
+- **Only `sdk` is ever written.** In this candidate the affinity record is
+  persisted solely by the SDK runtime when its native session binds. An ACP
+  session carries no Copilot backend descriptor at all, so it stays on ACP
+  because its launch origin on reopen is not `created` — not because a durable
+  `acp` record exists. The reader accepts `acp` so a future writer, or a session
+  written by a later version, is read rather than refused.
+
+### Where the opt-in actually takes effect
+
+The flag is read from the environment of the **session process**, so selection
+is host-side:
+
+- A session launched from a terminal inherits that terminal's environment.
+- A daemon-spawned session inherits the daemon process environment plus the
+  validated, sanitized environment variables supplied with the spawn request;
+  daemon-owned keys are stripped from that caller-supplied set before it is
+  merged into the child process environment. This is a pre-existing generic
+  spawn mechanism, not something this candidate adds.
+
+The candidate introduces **no** SDK-specific picker, no mobile or GUI toggle for
+this experiment, no per-user or per-account scoping, and no entry in the
+canonical feature catalog. Do not describe the experiment as a user-facing
+setting.
+
+### Persistent daemon operator route (current release source)
+
+The current release source adds a persisted operator route for the background
+service. This is a newer source basis than candidate `952e5a6b`; do not read it
+back into that candidate.
+
+- Use an installed Happier binary that already includes the
+  `service copilot-sdk-experiment` command and the service-definition refresh
+  logic. This route lives in the Happier CLI binary that manages the service.
+- Enable the flight with
+  `happier service copilot-sdk-experiment enable --cli-path <absolute-native-Copilot-executable>`.
+  The command persists the setting and requires a non-empty absolute path. It
+  does **not** prove that the file exists or that the executable is usable; path
+  syntax and runtime usability are distinct checks.
+- `happier service copilot-sdk-experiment status` reports the **saved**
+  configuration from settings. It is not proof that a running daemon has already
+  reloaded that configuration.
+- Apply a saved enable or disable with `happier service restart`. For the
+  installed background service, this is the authoritative re-apply step. On
+  macOS, restart compares the installed launchd plist to the expected template
+  generated from current settings and rewrites the definition before lifecycle
+  commands when it has drifted; it is not just a `kickstart` of a stale
+  definition.
+- Disable with `happier service copilot-sdk-experiment disable`, then run
+  `happier service restart`. This returns **new unbound** Copilot sessions
+  launched by this machine's background service to ACP while retaining the
+  native Copilot CLI path needed to reopen sessions that are already bound to
+  the SDK backend.
+- A never-configured service stays on the ACP default. Existing ACP sessions are
+  not migrated. Scope is this machine's daemon-launched **new Copilot sessions**
+  only; this is not a per-user, per-account, or mobile-device toggle.
+- The supported rollback here keeps the SDK-capable Happier binary in place and
+  clears only the new-session opt-in. Do **not** recommend downgrading to a
+  pre-SDK Happier binary after SDK sessions exist as though affinity or native
+  resume were preserved.
+- Do **not** use `happier daemon restart --restart-session-runners`,
+  `happier daemon restart --kill-sessions`, or
+  `happier daemon stop --kill-sessions` for this toggle. Those are separate
+  manual-daemon controls, not the background-service configuration apply path.
+
+Current source basis for this operator route: `apps/cli/src/cli/commands/service.ts:5,10-14`,
+`apps/cli/src/cli/commands/serviceCopilotSdkExperiment.ts:11-13,25-31,54-85`,
+`apps/cli/src/settings/copilotSdkExperimentSettings.ts:45-66,77-80,108-136`,
+`apps/cli/src/daemon/service/cli.ts:1774-1785,1915-1917`,
+`apps/cli/src/cli/commands/daemon.ts:82-90`.
+
+### Observing which backend a session selected
+
+- The resolved selection is logged as
+  `[copilot] runtime selection resolved kind=<acp|sdk> affinity=<acp|sdk|none> origin=<created|existing|unknown>`
+  at **debug** level. Session processes default to file log level `info`, so set
+  `HAPPIER_LOG_LEVEL=debug` (or `DEBUG`) for the session process to see it;
+  daemon processes already default to `debug`. Logs are written under
+  `$HAPPIER_HOME_DIR/logs/`.
+- An opt-in that could not be honored is logged at **info** by default:
+  `[copilot] Copilot SDK experiment requested but not applied: session launch origin is "<origin>" ...`.
+- The durable record lives in session metadata as `agentRuntimeDescriptorV1`
+  with `providerId: "copilot"` and `provider.backendMode` of `acp` or `sdk`.
+  `copilotSessionId` is the native **vendor** resume identity and is written by
+  both runtimes; it never identifies the transport.
+
+### Rollback
+
+Clearing or unsetting `HAPPIER_COPILOT_SDK_EXPERIMENT` returns **subsequent new
+sessions** to ACP. It does not, and must not be expected to, move sessions that
+already exist:
+
+- A session already bound to the SDK keeps the SDK, because durable affinity
+  outranks the flag.
+- A session already on ACP stays on ACP. That holds because a reopened session's
+  launch origin is not `created`, so the opt-in cannot apply to it; it does not
+  depend on any persisted `acp` record, and none is written.
+- Do not attempt to migrate an existing SDK session to ACP and do not invalidate
+  its native resume id. This candidate defines no supported migration, and doing
+  it by hand risks the unreadable-descriptor refusal above.
+
+### Validation constraints
+
+Do not run broad test suites on the shared serving host. Full CLI and E2E lanes
+belong on hosted macOS CI; local validation is limited to bounded smoke runs.
+
+### Source references (candidate `952e5a6b`)
+
+| Claim | Source |
+| --- | --- |
+| Flag name, accepted values, precedence, diagnostic | `apps/cli/src/backends/copilot/sdk/runtimeSelection.ts:24,50-62` |
+| No silent fallback | `apps/cli/src/backends/copilot/sdk/runtimeSelection.ts:67-76` |
+| Selection seam, debug selection line, unhonored-opt-in info log | `apps/cli/src/backends/copilot/runtimeFactory.ts:40-56` |
+| `HAPPIER_COPILOT_SDK_CLI_PATH` required, throws | `apps/cli/src/backends/copilot/runtimeFactory.ts:67,112-118` |
+| Optional SDK variables, observational call ceiling | `apps/cli/src/backends/copilot/runtimeFactory.ts:68-99` |
+| Durable affinity record, unreadable-descriptor refusal | `apps/cli/src/backends/copilot/sdk/backendAffinity.ts:34-41,80-104` |
+| Only `sdk` affinity is written | `apps/cli/src/backends/copilot/sdk/runtime.ts:119-124` (sole `persistCopilotBackendAffinity` call site) |
+| Affinity persisted at native bind | `apps/cli/src/backends/copilot/sdk/runtime.ts:106-126` |
+| Launch origin sourced only from the server response | `apps/cli/src/agent/runtime/initializeBackendRunSession.ts:435` |
+| Session env passed to the runtime | `apps/cli/src/agent/runtime/runStandardAcpProvider.ts:539` |
+| Daemon child environment composition | `apps/cli/src/daemon/spawn/resolveSpawnChildEnvironment.ts:29-47,126-153,227-241`, `apps/cli/src/daemon/startDaemon.ts:3639-3646,3664-3668,4151-4157` |
+| Log level defaults | `apps/cli/src/ui/logFileLevel.ts:28-35` |
+
 ## Synchronizing with upstream
 
 After merging `upstream/dev`, rerun the relevant tests above. Remove a

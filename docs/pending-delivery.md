@@ -43,6 +43,53 @@ Pending Queue V2 remains the sole durable owner of message custody, ordering, an
 
 This design intentionally has no polling loop, lease, generation, retry counter, or client-side activation clock. Pending owns the payload; the server owns activation intent; session activity fences staleness; and the daemon owns process start.
 
+## Session send blocked-delivery diagnostics
+
+Candidate `952e5a6bec06f7006a51c4ce3867cc342e8f3475`, not merged into this
+branch. This change is shared by every Copilot transport; it is not part of the
+experimental SDK opt-in.
+
+`happier session send --wait --json` previously reported a blocked pending
+delivery as `{"code":"wait_failed","message":"wait_failed"}`. The service knew
+the specific typed reason, but the CLI action seam collapsed the failure to its
+bare code and the serializer echoed that code back as the message, so a blocked
+delivery was indistinguishable from a wait-path exception.
+
+The service now carries the reason in a typed `blockedDeliveryReason` field,
+deliberately separate from `message`. The CLI action seam republishes it only
+after it round-trips the closed `PENDING_DELIVERY_BLOCKED_REASONS` vocabulary,
+rendered by the existing canonical formatter as
+`Current turn failed: pending delivery blocked (<reason>)`.
+
+What is unchanged, and must stay unchanged: `error.code`, the public envelope
+shape, and unsuccessful exit behavior. Only the human-readable message widens.
+
+What is deliberately withheld:
+
+- The service `message`, which legitimately carries provider prose for other
+  `wait_failed` producers. It is never forwarded.
+- `unknown`, even though it is a real vocabulary member, because the upstream
+  projection parser also uses it as the catch-all for an unrecognized server
+  reason. Publishing it would present an unparsed value as an authoritative
+  diagnosis.
+- Anything absent, malformed, or out of vocabulary. Each keeps the pre-existing
+  generic code as the message.
+
+A send that publishes no reason at all keeps the originating generic
+code/message pair. In the bounded outer-scenario fixture this remained
+`{"code":"timeout","message":"timeout"}`, but the general no-reason contract is
+broader: when no publishable reason exists, the public envelope preserves the
+underlying generic failure such as `wait_failed` or `timeout`, and no reason is
+invented.
+
+The repair is local to the send path. `packages/protocol` was not changed, so no
+error disclosure was broadened across unrelated actions.
+
+Sources at that candidate:
+`apps/cli/src/session/services/sendSessionMessage.ts:59-70,309,598-599`,
+`apps/cli/src/session/actions/createCliActionDeps.ts:1660-1686`,
+`packages/protocol/src/sessionMessages/pendingDeliveryBlockedReason.ts:6-38`.
+
 > **Superseded attempt-design record (2026-07-14).** Queue V2 is the only active pending-delivery system. `attempt_v1` will not be activated: its runtime/protocol branches are removed after the live exact-selector contract is extracted, and its schema/migrations are squashed or forward-contracted from bounded persistence evidence. Current authority and markers: `.project/plans/pending-delivery-attempt-v1-and-session-lifecycle-reliability-unification.md`. Everything below this notice is historical design evidence, not implementation or cutover instruction.
 
 ## Historical attempt design

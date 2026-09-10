@@ -1,6 +1,8 @@
 import { homedir } from 'node:os';
 
 import { configuration } from '@/configuration';
+import { readSettings } from '@/persistence';
+import { readCopilotSdkExperimentSettings } from '@/settings/copilotSdkExperimentSettings';
 
 import {
   applyDaemonServiceInstallPlan,
@@ -209,6 +211,7 @@ export async function previewDaemonServiceInstall(options: Readonly<{
     publicServerUrl,
     nodePath: runtimeTarget.nodePath,
     entryPath: runtimeTarget.entryPath,
+    copilotSdkExperiment: readCopilotSdkExperimentSettings(await readSettings()),
   });
   const expectedInstalledFile = previewPlanFileForTarget({
     plan,

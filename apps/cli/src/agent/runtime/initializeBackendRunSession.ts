@@ -3,7 +3,7 @@ import type {
   ApiSessionClient,
   SessionRuntimeActivityClientConfig,
 } from '@/api/session/sessionClient'
-import type { AgentState, Metadata, Session } from '@/api/types'
+import type { AgentState, Metadata, Session, SessionLaunchOrigin } from '@/api/types'
 import {
   type SessionAttachMetadataIdentityPolicy,
 } from '@happier-dev/protocol'
@@ -86,6 +86,15 @@ export interface InitializeBackendRunSessionResult {
   reconnectionHandle: { cancel: () => void } | null
   reportedSessionId: string | null
   attachedToExistingSession: boolean
+  /**
+   * Authoritative create-or-load origin reported by the server for this launch.
+   *
+   * Distinct from `attachedToExistingSession`, which only says whether this
+   * process attached to an already-RUNNING session: that is still `false` when
+   * a pre-existing session row is loaded by tag. `'unknown'` covers attach paths
+   * and older servers, and is never evidence that a session is new.
+   */
+  sessionLaunchOrigin: SessionLaunchOrigin
   disposeRuntimeActivity?: () => Promise<void>
   commitPendingFirstInputAfterRuntimeReady?: (() => Promise<void>) | null
 }
@@ -346,6 +355,9 @@ export async function initializeBackendRunSession(
       reconnectionHandle: null,
       reportedSessionId: existingSessionId,
       attachedToExistingSession: true,
+      // Attaching to a running session yields no create-or-load response, so the
+      // authoritative origin is genuinely unknown on this path.
+      sessionLaunchOrigin: 'unknown',
       disposeRuntimeActivity: preparedRuntimeActivity?.dispose,
       commitPendingFirstInputAfterRuntimeReady,
     }
@@ -420,6 +432,7 @@ export async function initializeBackendRunSession(
     reconnectionHandle,
     reportedSessionId,
     attachedToExistingSession: false,
+    sessionLaunchOrigin: response?.launchOrigin ?? 'unknown',
     disposeRuntimeActivity: preparedRuntimeActivity?.dispose,
     commitPendingFirstInputAfterRuntimeReady,
   }

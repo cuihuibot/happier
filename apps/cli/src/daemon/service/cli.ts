@@ -7,6 +7,7 @@ import { configuration, reloadConfiguration } from '@/configuration';
 import { readCredentials, readDaemonState, readSettings } from '@/persistence';
 import { getActiveServerProfile, upsertServerProfileByUrl } from '@/server/serverProfiles';
 import { isServerIdFilesystemSafe } from '@/server/serverId';
+import { readCopilotSdkExperimentSettings } from '@/settings/copilotSdkExperimentSettings';
 import { isBun } from '@/utils/runtime';
 import { buildMissingLocalRelayError, resolveLocalRelay } from '@/utils/localRelay';
 import { resolveJavaScriptRuntimeExecutable } from '@/runtime/js/resolveJavaScriptRuntimeExecutable';
@@ -923,6 +924,7 @@ export async function resolveDaemonServiceListEntries(
     publicServerUrl: runtime.publicServerUrl,
     nodePath: expectedDefaultRuntimeTarget.nodePath,
     entryPath: expectedDefaultRuntimeTarget.entryPath,
+    copilotSdkExperiment: readCopilotSdkExperimentSettings(settings),
   });
   const expectedDefaultFile = expectedDefaultPlan.files[0] ?? null;
   if (!expectedDefaultFile) {
@@ -1412,6 +1414,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
       publicServerUrl: installRuntime.publicServerUrl,
       nodePath: installRuntime.nodePath,
       entryPath: installRuntime.entryPath,
+      copilotSdkExperiment: readCopilotSdkExperimentSettings(await readSettings()),
     });
     const shouldKickstartCurrentDarwinInstall = installRuntime.platform === 'darwin'
       && ownership.kind !== 'none'
@@ -1768,6 +1771,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
           publicServerUrl: runtime.publicServerUrl,
           nodePath: runtime.nodePath,
           entryPath: runtime.entryPath,
+          copilotSdkExperiment: readCopilotSdkExperimentSettings(await readSettings()),
         });
         const expectedFile = expectedPlan.files[0];
         if (expectedFile) {

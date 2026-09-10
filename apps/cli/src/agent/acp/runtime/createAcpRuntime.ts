@@ -28,7 +28,7 @@ import { abortPendingAcpPermissionRequests } from '@/agent/acp/backend/permissio
 import { createCatalogAcpBackend } from '@/agent/acp/createCatalogAcpBackend';
 import { extractAcpMediaContentBlocks } from '@/agent/acp/media/extractAcpMediaContentBlocks';
 import type { AcpRuntimeSessionClient } from '@/agent/acp/sessionClient';
-import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
+import { createSanitizedBoundaryFailure, isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import type { AgentState, Metadata } from '@/api/types';
 import { getAgentModelConfig, getAgentSessionModeDescriptor, type AgentId } from '@happier-dev/agents';
@@ -402,6 +402,18 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
    */
   isProviderSessionResumePoisoned?: () => boolean;
   /**
+   * Whether a completed `dispose()` actually proved the owned runtime process
+   * exited.
+   *
+   * A backend whose transport hides process ownership can complete shutdown
+   * without ever observing an exit. Reporting `false` keeps the owner from
+   * starting a replacement on top of a runtime that may still be alive.
+   * Backends that do not implement this are unchanged: an absent reporter is
+   * treated exactly as before, so existing ACP callers keep their behavior.
+   */
+  reportsVerifiedTermination?: () => boolean;
+
+  /**
    * Optional provider-native ACP session mode change (e.g. "plan" vs "code").
    */
   setSessionMode?: (sessionId: string, modeId: string) => Promise<void>;
@@ -651,6 +663,12 @@ export function createAcpRuntime(params: {
 }): AcpRuntime {
   let backend: AcpRuntimeBackend | null = null;
   let backendPromise: Promise<AcpRuntimeBackend> | null = null;
+  /**
+   * Set when a backend dispose failed. The backend reference is retained so
+   * cleanup stays reachable for a later reset, and new startup is refused
+   * until it succeeds.
+   */
+  let unresolvedBackendCleanup = false;
   let messageForwarder: ReturnType<typeof createAcpAgentMessageForwarder> | null = null;
   let sessionId: string | null = null;
   let runtimeMetadataPublicationGeneration = 0;
@@ -2155,6 +2173,20 @@ export function createAcpRuntime(params: {
   };
 
   const ensureBackend = async (): Promise<AcpRuntimeBackend> => {
+    // A runtime whose cleanup never completed must not be built on: starting a
+    // new session here would publish success while the previous native runtime
+    // may still be alive and unowned.
+    if (unresolvedBackendCleanup) {
+      // Named operational recovery, not a silent dead end. This flag lives on
+      // one runtime object inside this CLI process, so restarting the CLI
+      // releases it; the refusal says so instead of leaving the session
+      // permanently unusable with no stated way forward.
+      throw new Error(
+        `[${params.provider}] cannot start a new backend: the previous native runtime's shutdown ` +
+          'did not complete or could not be confirmed, so it may still be running. Restart the ' +
+          'Happier CLI to clear this, and stop any leftover provider process first.',
+      );
+    }
     if (backend) return backend;
     if (backendPromise) return await backendPromise;
     backendPromise = (async () => {
@@ -2545,6 +2577,7 @@ export function createAcpRuntime(params: {
       if (resetFlight) return await resetFlight;
       const operation = (async (): Promise<void> => {
         resetInProgress = true;
+        let cleanupFailure: Error | null = null;
         const startupFlight = startOrLoadFlight?.promise ?? null;
         const deferredDrainFlight = postStartPendingDrainFlight;
         runtimeGeneration += 1;
@@ -2572,12 +2605,50 @@ export function createAcpRuntime(params: {
           const backendCreation = backendPromise;
           if (backendCreation) await backendCreation.catch(() => undefined);
           if (backend) {
+            const disposing = backend;
             try {
-              await backend.dispose();
-            } catch (e) {
-              logger.debug(`[${params.provider}] Failed to dispose backend (non-fatal)`, e);
+              await disposing.dispose();
+              // Dispose resolving is not by itself proof the owned OS process
+              // exited. A backend that can report its own terminal state gets
+              // to say so; an unverified termination is a FAILED reset, not a
+              // quiet flag, because starting a replacement on top of a runtime
+              // that may still be alive is the failure this contract exists to
+              // prevent — and because a force operation that would succeed on a
+              // later attempt must stay reachable through the retained backend.
+              if (disposing.reportsVerifiedTermination?.() === false) {
+                unresolvedBackendCleanup = true;
+                cleanupFailure = createSanitizedBoundaryFailure({
+                  provider: params.provider,
+                  phase: 'reset',
+                  code: 'unverified-termination',
+                });
+                logger.warn(
+                  `[${params.provider}] backend shutdown completed without verified process termination; retaining runtime ownership for retry and blocking new startup`,
+                );
+              } else {
+                backend = null;
+                unresolvedBackendCleanup = false;
+              }
+            } catch {
+              // Canonical cleanup contract: a backend we could not prove
+              // stopped must keep its owner. Dropping the reference here made
+              // the failure unreachable — no later reset could retry, and a
+              // fresh startup would silently succeed on top of a runtime that
+              // may still be alive. The backend is retained so cleanup remains
+              // reachable, startup is blocked until it resolves, and the caller
+              // is told the reset failed instead of being handed a success.
+              unresolvedBackendCleanup = true;
+              cleanupFailure = createSanitizedBoundaryFailure({
+                provider: params.provider,
+                phase: 'reset',
+                code: 'backend-cleanup-failed',
+              });
+              // Sanitized: the provider already reported its own diagnostic on
+              // a default-on signal. Native error text is not repeated here.
+              logger.warn(
+                `[${params.provider}] backend cleanup did not complete; retaining runtime ownership for retry and blocking new startup`,
+              );
             }
-            backend = null;
           }
           await identityReset;
           await startupFlight?.catch(() => undefined);
@@ -2587,8 +2658,14 @@ export function createAcpRuntime(params: {
           postStartDrainController = null;
           resetInProgress = false;
         }
+        // Raised only after every other stage has been given its chance, so a
+        // failed shutdown never skips the rest of the reset.
+        if (cleanupFailure) throw cleanupFailure;
       })();
       resetFlight = operation;
+      // Callers that only observe `resetFlight` must not turn a propagated
+      // cleanup failure into a process-level unhandled rejection.
+      void operation.catch(() => undefined);
       try {
         await operation;
       } finally {

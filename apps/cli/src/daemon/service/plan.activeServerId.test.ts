@@ -21,6 +21,7 @@ describe('daemon service plan active server identity', () => {
       ...baseInstallParams,
       targetMode: 'pinned',
       instanceId: 'service-instance',
+      copilotSdkExperiment: null,
     })).toThrow(/active server id/i);
   });
 
@@ -30,6 +31,7 @@ describe('daemon service plan active server identity', () => {
       targetMode: 'pinned',
       instanceId: 'service-instance',
       activeServerId: 'company-profile',
+      copilotSdkExperiment: null,
     } as const;
 
     const plan = planDaemonServiceInstall(params);
@@ -45,6 +47,7 @@ describe('daemon service plan active server identity', () => {
       ...baseInstallParams,
       targetMode: 'default-following',
       instanceId: 'service-instance',
+      copilotSdkExperiment: null,
     });
 
     expect(plan.files[0]?.content).not.toContain('HAPPIER_ACTIVE_SERVER_ID=');

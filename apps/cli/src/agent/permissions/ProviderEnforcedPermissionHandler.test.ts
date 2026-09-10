@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,7 @@ import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { ProviderEnforcedPermissionHandler } from './ProviderEnforcedPermissionHandler';
 import { __resetToolTraceForTests } from '@/agent/tools/trace/toolTrace';
+import { SESSION_ABORT_FLUSH_BUDGET_MS } from '@/session/transport/shared/sessionTimeouts';
 
 class FakeRpcHandlerManager {
   handlers = new Map<string, (payload: any) => any>();
@@ -480,6 +481,39 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
       reason: 'Aborted by user',
       decision: 'abort',
     });
+  });
+
+  it('settles the abort corridor when best-effort session writes never drain', async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new FakeSession();
+      let flushCalls = 0;
+      (session as unknown as { flush: () => Promise<void> }).flush = () => {
+        flushCalls += 1;
+        return new Promise<void>(() => undefined);
+      };
+      const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
+
+      const pending = handler.handleToolCall('perm-abort-stalled-flush', 'bash', { command: 'pwd' });
+      const pendingRejected = expect(pending).rejects.toThrow('Aborted by user');
+      expect(session.agentState.requests['perm-abort-stalled-flush']).toBeTruthy();
+
+      const aborted = handler.abortPendingRequestsAndFlush('Aborted by user');
+      await vi.advanceTimersByTimeAsync(SESSION_ABORT_FLUSH_BUDGET_MS);
+
+      await expect(aborted).resolves.toBeUndefined();
+      expect(flushCalls).toBe(1);
+      await pendingRejected;
+      expect(session.agentState.requests['perm-abort-stalled-flush']).toBeFalsy();
+      expect(session.agentState.completedRequests['perm-abort-stalled-flush']).toMatchObject({
+        tool: 'bash',
+        status: 'canceled',
+        reason: 'Aborted by user',
+        decision: 'abort',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('records permission-request tool trace events when enabled', async () => {
