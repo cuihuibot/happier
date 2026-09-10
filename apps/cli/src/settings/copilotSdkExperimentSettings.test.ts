@@ -20,23 +20,25 @@ describe('copilot SDK experiment settings', () => {
     const value = readCopilotSdkExperimentSettings({
       copilotSdkExperiment: { enabled: true, cliPath: '/usr/local/bin/copilot' },
     });
-    expect(value).toEqual({ enabled: true, cliPath: '/usr/local/bin/copilot' });
+    expect(value).toEqual({ newSessionOptIn: true, cliPath: '/usr/local/bin/copilot' });
   });
 
   it('emits both allowlisted keys together so a selected SDK runtime can bind its CLI', () => {
-    const env = buildCopilotSdkExperimentServiceEnv({ enabled: true, cliPath: '/usr/local/bin/copilot' });
+    const env = buildCopilotSdkExperimentServiceEnv({ newSessionOptIn: true, cliPath: '/usr/local/bin/copilot' });
     expect(env).toEqual({
       HAPPIER_COPILOT_SDK_EXPERIMENT: '1',
       HAPPIER_COPILOT_SDK_CLI_PATH: '/usr/local/bin/copilot',
     });
   });
 
-  it('treats an explicitly disabled opt-in as off and emits no keys', () => {
+  it('drops only the opt-in flag when disabled, retaining the path for existing SDK sessions', () => {
     const value = readCopilotSdkExperimentSettings({
       copilotSdkExperiment: { enabled: false, cliPath: '/usr/local/bin/copilot' },
     });
-    expect(value).toBeNull();
-    expect(buildCopilotSdkExperimentServiceEnv(value)).toEqual({});
+    expect(value).toEqual({ newSessionOptIn: false, cliPath: '/usr/local/bin/copilot' });
+    expect(buildCopilotSdkExperimentServiceEnv(value)).toEqual({
+      HAPPIER_COPILOT_SDK_CLI_PATH: '/usr/local/bin/copilot',
+    });
   });
 
   it('fails loudly when a persisted opt-in is enabled without a native CLI path', () => {
@@ -55,7 +57,7 @@ describe('copilot SDK experiment settings', () => {
 
   it('accepts a validated operator opt-in', () => {
     expect(parseCopilotSdkExperimentOptIn({ cliPath: '/opt/copilot/bin/copilot' })).toEqual({
-      enabled: true,
+      newSessionOptIn: true,
       cliPath: '/opt/copilot/bin/copilot',
     });
   });

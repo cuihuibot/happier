@@ -6,9 +6,10 @@ import { describe, expect, it } from 'vitest';
 import { doesInstalledDaemonServiceDefinitionMatchExpected } from './doesInstalledDaemonServiceDefinitionMatchExpected';
 import { planDaemonServiceInstall } from './plan';
 
-const SDK_OPT_IN = { enabled: true, cliPath: '/usr/local/bin/copilot' } as const;
+const SDK_OPT_IN = { newSessionOptIn: true, cliPath: '/usr/local/bin/copilot' } as const;
+const SDK_DISABLED_RETAINED = { newSessionOptIn: false, cliPath: '/usr/local/bin/copilot' } as const;
 
-function planWith(copilotSdkExperiment: { enabled: true; cliPath: string } | null) {
+function planWith(copilotSdkExperiment: { newSessionOptIn: boolean; cliPath: string } | null) {
   return planDaemonServiceInstall({
     platform: 'darwin',
     mode: 'user',
@@ -41,6 +42,16 @@ describe('daemon service definition carries the persisted Copilot SDK flight', (
   it('generates both allowlisted keys when the flight is persisted', () => {
     const content = planWith(SDK_OPT_IN).files[0]?.content ?? '';
     expect(content).toContain('HAPPIER_COPILOT_SDK_EXPERIMENT');
+    expect(content).toContain('HAPPIER_COPILOT_SDK_CLI_PATH');
+    expect(content).toContain('/usr/local/bin/copilot');
+  });
+
+  it('keeps the retained CLI path but drops the opt-in flag once the flight is disabled', () => {
+    const content = planWith(SDK_DISABLED_RETAINED).files[0]?.content ?? '';
+    // No opt-in flag: new sessions fall back to the ACP default.
+    expect(content).not.toContain('HAPPIER_COPILOT_SDK_EXPERIMENT');
+    // Path retained: a session already bound to the SDK backend can still bind
+    // its runtime instead of throwing when it is reopened.
     expect(content).toContain('HAPPIER_COPILOT_SDK_CLI_PATH');
     expect(content).toContain('/usr/local/bin/copilot');
   });
