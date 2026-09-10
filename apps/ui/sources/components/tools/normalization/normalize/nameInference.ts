@@ -10,6 +10,58 @@ function isUiChangeTitleAlias(name: string): boolean {
     return isChangeTitleToolNameAlias(name) || isLegacySlashChangeTitleName(name);
 }
 
+const TASK_COMPLETE_TOOL_NAME = 'task_complete';
+
+function isTaskCompleteToken(value: unknown): boolean {
+    const raw = firstNonEmptyString(value);
+    if (!raw) return false;
+    return raw.toLowerCase().replace(/[\s_-]+/g, '_') === TASK_COMPLETE_TOOL_NAME;
+}
+
+/**
+ * The identities a completion event was actually recorded under before the CLI learned the rule:
+ * the change-title tool it was misread as, and the generic unknown fallbacks. Any other identity is
+ * an explicit tool claim and is never replaced.
+ */
+function isRepairableCompletionIdentity(name: string): boolean {
+    if (isUiChangeTitleAlias(name)) return true;
+    const normalized = name.trim().toLowerCase();
+    return normalized === 'other' || normalized === 'unknown' || normalized === 'unknown tool';
+}
+
+/**
+ * Turn-completion rows must reach the completion card, not the change-title card.
+ *
+ * Providers that publish the final turn summary as an ACP tool call are only identified by the
+ * ACP title/description, so sessions recorded before the CLI learned that rule persisted the row
+ * under a `change_title`/unknown identity while still carrying the real `summary`. Repair those
+ * rows here — the UI compatibility layer that already owns legacy tool identities.
+ *
+ * The correction is deliberately narrow. It only replaces the identities such a row could have
+ * been recorded under, it never overrides an explicit canonical identity a producer already
+ * resolved, and it never fires when the row stores its own `title` property. A stored `title` is a
+ * change-title payload whatever it holds — `""`, whitespace, or a non-string are all values the
+ * change-title schema and view already handle, and none of them make the row a completion event.
+ */
+function resolveTaskCompleteToolName(toolName: string, input: unknown, description?: string | null): string | null {
+    if (isTaskCompleteToken(toolName)) return TASK_COMPLETE_TOOL_NAME;
+
+    const inputObj = asRecord(input);
+    if (!firstNonEmptyString(inputObj?.summary)) return null;
+    if (inputObj && Object.prototype.hasOwnProperty.call(inputObj, 'title')) return null;
+
+    const recordedCanonicalName =
+        firstNonEmptyString(asRecord(inputObj?._happier)?.canonicalToolName) ??
+        firstNonEmptyString(asRecord(inputObj?._happy)?.canonicalToolName);
+    if (recordedCanonicalName && isTaskCompleteToken(recordedCanonicalName)) return TASK_COMPLETE_TOOL_NAME;
+    if (!isRepairableCompletionIdentity(recordedCanonicalName ?? toolName)) return null;
+
+    const acpTitle = asRecord(inputObj?._acp)?.title;
+    if (isTaskCompleteToken(acpTitle) || isTaskCompleteToken(description)) return TASK_COMPLETE_TOOL_NAME;
+
+    return null;
+}
+
 function extractContradictoryWrappedToolName(params: {
     toolName: string;
     input: unknown;
@@ -134,6 +186,9 @@ function resolveSpecificAcpWrappedToolName(toolName: string, input: unknown): st
 }
 
 export function canonicalizeToolNameForRendering(toolName: string, input: unknown, description?: string | null): string {
+    const taskCompleteToolName = resolveTaskCompleteToolName(toolName, input, description);
+    if (taskCompleteToolName) return taskCompleteToolName;
+
     const inputObj = asRecord(input);
     const happier = asRecord(asRecord(inputObj)?._happier);
     const canonicalFromHappier = firstNonEmptyString(happier?.canonicalToolName);

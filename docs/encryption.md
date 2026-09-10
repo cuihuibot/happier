@@ -624,8 +624,52 @@ because the secret travels camera-to-app. Web pairing cannot make the same guara
 hostile self-hosted relay: that relay also serves the JavaScript which receives the secret, so the
 web flow necessarily trusts its web origin.
 
+## Account-link key families
+
+Account linking transfers a 32-byte secret from an already-authenticated approver to a receiving
+client. Historically that secret was always a legacy master recovery secret, from which the client
+derives the account content key pair. Approvers that hold only a content data key transfer that key
+instead. The two cases are byte-indistinguishable on the wire, and the deep-link/QR channel carries
+no version or capability field: `/v1/auth/account/request` transports only the ephemeral public key,
+and the account-connect deep link consumes its entire query string as that public key. Appending a
+tag or suffix would therefore corrupt approvers that are already deployed.
+
+Because the transfer channel cannot negotiate, the receiver disambiguates instead of the sender:
+
+- The wire payload stays exactly 32 raw untagged bytes, byte-identical to previous releases, so a
+  new client and an old client interoperate in both directions.
+- Before storing credentials, the receiver reads its own account settings envelope with the token it
+  just obtained and tries to open it under each candidate interpretation. The account-scoped machine
+  key is derived differently per family — the raw bytes for a content data key, and
+  `SHA-512(deriveKey(secret, 'Happy EnCoder', ['content']))[0..32]` for a legacy master secret — so a
+  successful secretbox authentication identifies the family cryptographically rather than by
+  guessing.
+- Exactly one candidate opening the envelope resolves the family. Any other outcome refuses: a
+  candidate rejected by the account evidence, ambiguous evidence, unreadable or malformed evidence,
+  and an account that exposes no readable encrypted settings envelope at all.
+- Absent evidence is a refusal, not a default. An account with no readable encrypted settings has
+  not thereby proven that it holds no encrypted machines, sessions, or other account-scoped records,
+  and it does not fix the family that later writes will be sealed under. Resolving that case to a
+  guessed family would recreate exactly the silent wrong-key divergence this check exists to
+  prevent.
+
+This is a deliberate compatibility limitation. An account that exposes no readable encrypted
+settings envelope cannot complete an account-link transfer through this path and must use a flow
+that establishes its key family directly. The receiving client refuses visibly, with an actionable
+message, and stores nothing: no credential is persisted, no writer is initialized, and no account
+state is mutated. Failing to link is recoverable by the user; persisting the wrong key is silent
+and is not.
+
+Storing the wrong family is not a recoverable mistake at rest: a content data key stored as a legacy
+master secret derives a different content key pair, so every account-scoped record — machine
+metadata, session metadata, settings — silently fails to decrypt while pairing itself appears to
+succeed. Resolving the family before the credential is persisted keeps that failure out of storage.
+
 ## Implementation references
 - Client crypto: `apps/cli/src/api/encryption.ts`
+- Account-link key-family resolution: `apps/ui/sources/auth/flows/accountLinkPayload.ts`,
+  `apps/ui/sources/auth/flows/resolveAccountLinkCredentials.ts`
+- Account-scoped key derivation: `packages/protocol/src/crypto/accountScopedCipher.ts`
 - Session message format: `apps/cli/src/api/types.ts`
 - Server message ingestion: `apps/server/sources/app/api/socket/sessionUpdateHandler.ts`
 - Artifact/KV routes: `apps/server/sources/app/api/routes/artifactsRoutes.ts`, `apps/server/sources/app/kv/kvMutate.ts`

@@ -23,6 +23,7 @@ import { ReasoningView } from '../workflow/ReasoningView';
 import { WorkspaceIndexingPermissionView } from '../system/WorkspaceIndexingPermissionView';
 import { LSView } from '../fileOps/LSView';
 import { ChangeTitleView } from '../workflow/ChangeTitleView';
+import { TaskCompleteView } from '../workflow/TaskCompleteView';
 import { DeleteView } from '../fileOps/DeleteView';
 import { MCPToolView } from '../system/MCPToolView';
 import { UnknownToolView } from '../system/UnknownToolView';
@@ -81,6 +82,7 @@ export const toolViewRegistry: Record<KnownCanonicalToolNameV2, ToolViewComponen
     AcpHistoryImport: AcpHistoryImportView,
     WorkspaceIndexingPermission: WorkspaceIndexingPermissionView,
     change_title: ChangeTitleView,
+    task_complete: TaskCompleteView,
     SubAgentRun: SubAgentRunView,
     AgentTeamCreate: AgentTeamView,
     AgentTeamDelete: AgentTeamView,
@@ -116,6 +118,7 @@ export { WebSearchView } from '../web/WebSearchView';
 export { CodeSearchView } from '../fileOps/CodeSearchView';
 export { WorkspaceIndexingPermissionView } from '../system/WorkspaceIndexingPermissionView';
 export { ChangeTitleView } from '../workflow/ChangeTitleView';
+export { TaskCompleteView } from '../workflow/TaskCompleteView';
 export { DeleteView } from '../fileOps/DeleteView';
 export { MCPToolView } from '../system/MCPToolView';
 export { UnknownToolView } from '../system/UnknownToolView';

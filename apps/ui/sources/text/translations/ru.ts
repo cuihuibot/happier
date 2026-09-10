@@ -1339,6 +1339,8 @@ export const ru: TranslationStructure = {
     openMachine: "Открыть машину",
     terminalUrlPlaceholder: "happier://terminal?...",
     accountUrlPlaceholder: "happier:///account?...",
+    accountLinkKeyFamilyUnverifiedTitle: 'Не удалось проверить ключ шифрования этого аккаунта',
+    accountLinkKeyFamilyUnverifiedBody: 'Это устройство не смогло подтвердить, какой ключ шифрования использует аккаунт, поэтому оно остановилось, чтобы не сохранить неверный ключ. Откройте Настройки → Аккаунт на устройстве, где вы уже вошли, дождитесь окончания синхронизации и повторите сканирование.',
     restoreQrInstructions:
       "На устройстве, где вы уже вошли в аккаунт, откройте Настройки → Аккаунт и отсканируйте этот QR‑код.",
     externalAuthVerifiedTitle: ({ provider }: { provider: string }) =>
@@ -6938,6 +6940,7 @@ export const ru: TranslationStructure = {
       switchMode: "Сменить режим",
       taskOutput: "Вывод задачи",
       taskStop: "Остановить задачу",
+      taskComplete: "Задача завершена",
     },
     geminiExecute: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,

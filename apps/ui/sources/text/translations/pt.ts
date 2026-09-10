@@ -1427,6 +1427,8 @@ export const pt: TranslationStructure = {
     openMachine: "Abrir máquina",
     terminalUrlPlaceholder: "happier://terminal?...",
     accountUrlPlaceholder: "happier:///account?...",
+    accountLinkKeyFamilyUnverifiedTitle: 'Não é possível verificar a chave de criptografia desta conta',
+    accountLinkKeyFamilyUnverifiedBody: 'Este dispositivo não conseguiu confirmar qual chave de criptografia a conta usa, então parou em vez de salvar uma chave possivelmente errada. Abra Configurações → Conta no dispositivo em que você já está conectado, aguarde a sincronização terminar e escaneie novamente.',
     restoreQrInstructions:
       "Em um dispositivo onde você já está conectado, vá em Configurações → Conta e escaneie este código QR.",
     externalAuthVerifiedTitle: ({ provider }: { provider: string }) =>
@@ -7067,6 +7069,7 @@ export const pt: TranslationStructure = {
       switchMode: "Alterar modo",
       taskOutput: "Saída da tarefa",
       taskStop: "Parar tarefa",
+      taskComplete: "Tarefa concluída",
     },
     geminiExecute: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
