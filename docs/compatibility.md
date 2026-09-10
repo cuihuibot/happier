@@ -2,6 +2,11 @@
 
 This document defines when Happier preserves old behavior across UI, CLI, daemon, server, installers, and persisted state. The goal is safe upgrades and mixed-version operation without turning undeployed implementation history into permanent compatibility debt.
 
+Environment-specific rollout, acceptance, artifact, and recovery status belongs
+in an operator-controlled deployment repository. See
+[Repository boundary for custom deployments](repository-boundary.md). This
+documentation split changes no compatibility requirement or runtime behavior.
+
 ## Trigger
 
 Apply this policy when a change affects a cross-component wire shape or semantic, persisted/session/settings data, schema or migration, feature/capability negotiation, installer or service state, upgrade/coexistence, or rollback. Routine internal refactors that leave these seams unchanged do not need a compatibility matrix or shim.
@@ -108,6 +113,45 @@ Every retained compatibility path records:
 - its removal condition.
 
 Remove the path when its support window has ended and evidence shows no supported reader, writer, or stored shape still requires it. Do not remove a released-data reader merely because current writers stopped producing that shape.
+
+### Daemon spawn identity settlement
+
+The customization fork carries a prospective coexistence adapter for clients
+that omit a usable caller nonce. This is not a new support window, client floor,
+relay protocol revision, startup SLO, or caller-key idempotency guarantee.
+
+| Reachable direction | Required behavior |
+| --- | --- |
+| Nonce-omitting client to updated daemon, provider-safe RPC | Settle only the exact accepted result nonce and return its `sessionId`; do not guess or spawn again. |
+| Nonblank string caller nonce to updated daemon | Preserve modern accepted-but-pending behavior so the caller can resolve its own nonce. |
+| Missing, non-string, empty, or whitespace-only nonce | Use the shared settlement adapter rather than selecting modern pending behavior. |
+| Legacy spawn RPC to updated daemon | Preserve direct settlement and boolean `pendingFirstInputAccepted`, including `false`. |
+| Rollback to a daemon without the adapter | Existing nonce-less failure can return; rollback readiness and artifact availability are environment-specific. |
+
+The adapter delegates to `awaitSpawnedSessionId` and the existing nonce
+settlement primitive; it does not own a parallel identity lookup or admission
+policy. Preserve `pendingFirstInputAccepted` on direct settlement so the client
+does not lose the existing custody signal. Acknowledgement does not prove
+first-turn execution.
+
+The daemon settlement default remains 90 seconds, with existing environment
+bounds. The inspected client's spawn RPC default is five minutes, separately
+bounded by its existing timeout reader; neither default is a startup SLO.
+On daemon `SESSION_WEBHOOK_TIMEOUT`, the inspected old client still polls its
+own unknown nonce. Slow or failed identity settlement can therefore retain
+the original failure even if a session exists. Transport/retry behavior and
+semantic request coalescing are unchanged. No guarantee is made that two
+identical nonce-less requests always create different sessions or that they
+provide caller-key idempotency. Mocked out-of-order resolver coverage proves
+neither real daemon admission behavior nor phone acceptance. In particular,
+"no caller-key deduplication" must not be restated as a guarantee that every
+retry creates a distinct session.
+
+This prospective coexistence adapter has no invented expiration date.
+Retirement requires a separate owner decision supported by evidence that
+nonce-omitting callers are no longer supported, or
+that an independently validated replacement covers them. This experiment
+does not establish a permanent released-client obligation.
 
 ### Account-pool quota-reset opt-in (development)
 

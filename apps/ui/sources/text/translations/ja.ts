@@ -1691,6 +1691,8 @@ export const ja: TranslationStructure = {
     openMachine: "マシンを開く",
     terminalUrlPlaceholder: "happier://terminal?...",
     accountUrlPlaceholder: "happier:///account?...",
+    accountLinkKeyFamilyUnverifiedTitle: 'このアカウントの暗号化キーを検証できません',
+    accountLinkKeyFamilyUnverifiedBody: 'このデバイスはアカウントがどの暗号化キーを使っているか確認できなかったため、誤ったキーを保存せずに中断しました。すでにサインインしているデバイスで 設定 → アカウント を開き、同期の完了を確認してからもう一度スキャンしてください。',
     restoreQrInstructions:
       "すでにサインインしている端末で、設定 → アカウント に移動してこのQRコードをスキャンしてください。",
     externalAuthVerifiedTitle: ({ provider }: { provider: string }) =>
@@ -7237,6 +7239,7 @@ localTailscale: {
       switchMode: "モードを切り替え",
       taskOutput: "タスクの出力",
       taskStop: "タスクを停止",
+      taskComplete: "タスク完了",
     },
     geminiExecute: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,

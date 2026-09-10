@@ -2,6 +2,10 @@
 
 This document describes the Happier CLI (`apps/cli`) and its daemon. The CLI is both an interactive tool and a background session manager that keeps machine state in sync with the server.
 
+Environment-specific rollout, acceptance, and recovery records are intentionally
+outside this public architecture page. See
+[Repository boundary for custom deployments](repository-boundary.md).
+
 ## System overview
 
 ```mermaid
@@ -327,6 +331,51 @@ Sessions can be started by:
 - Remote requests over RPC (from mobile/web via machine connection).
 
 Daemon session spawning uses `registerCommonHandlers` to expose a controlled RPC surface (shell commands, file operations, search/diff helpers).
+
+### Accepted spawn identity settlement
+
+The customization fork includes a compatibility adapter for callers that omit a
+usable spawn nonce. See the [maintained customization contract](cuihui-customizations.md#daemon-spawn-identity-settlement)
+and [mixed-client limits](compatibility.md#daemon-spawn-identity-settlement).
+
+The machine RPC adapter in `apps/cli/src/api/machine/rpcHandlers.ts` calls
+`handleTrackedSpawnHappySession` once per handler invocation. For
+`SPAWN_HAPPY_SESSION_PROVIDER_SAFE`, a caller-supplied `spawnNonce` that is a
+string with nonblank trimmed content retains the existing response, including
+modern accepted-but-pending success. The opaque identifier helper validates
+presence without rewriting its bytes.
+
+When that caller nonce is absent, non-string, empty, or whitespace-only, the
+provider-safe route uses `settleAcceptedSpawnIdentity`, also used by the
+legacy `SPAWN_HAPPY_SESSION` RPC. Existing errors, directory-approval responses,
+and successes already carrying `sessionId` pass through. For a pending success,
+the adapter delegates to `awaitSpawnedSessionId` in
+`apps/cli/src/session/services/awaitSpawnedSessionId.ts`. Resolution uses only
+the nonce on that accepted spawn's result, including a daemon-generated nonce.
+It does not guess from the newest session, directory, timestamp, or current
+child, and settlement does not spawn a second session.
+
+On settlement success the response is `{ type: 'success', sessionId }`,
+preserving `pendingFirstInputAccepted` if it was a boolean, including `false`.
+This preserves the custody signal; it does not assert that the first input was
+executed. Existing daemon admission/coalescing and retry behavior is unchanged:
+per-result identity correlation is not a guarantee that identical requests
+create distinct sessions or that nonce-less requests have caller-key idempotency.
+
+The existing helper defaults to a 90-second settlement budget and 250 ms polling.
+`HAPPIER_SPAWN_SESSION_ID_RESOLVE_TIMEOUT_MS` and
+`HAPPIER_SPAWN_SESSION_ID_RESOLVE_POLL_INTERVAL_MS` retain their existing bounds
+(100 ms to 10 minutes and 25 ms to 10 seconds, respectively); this experiment
+does not change those settings. Failure to resolve is not fabricated success:
+timeout returns `SESSION_WEBHOOK_TIMEOUT`, while missing resolution capability,
+untracked identity, and resolver errors retain the helper's explicit errors.
+The inspected old client still polls its own never-submitted nonce on that
+timeout, so the adapter does not solve every delayed-start case.
+
+Regression cases in `apps/cli/src/api/machine/rpcHandlers.test.ts` cover
+generated-nonce direct identity with first-input acknowledgement, malformed or
+blank nonce handling, out-of-order settlement, bounded timeout, and an
+already-direct ID. These tests do not establish live client acceptance.
 
 ### Machine state
 

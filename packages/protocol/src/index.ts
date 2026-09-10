@@ -1170,6 +1170,7 @@ export {
   BOX_BUNDLE_NONCE_BYTES,
   BOX_BUNDLE_PUBLIC_KEY_BYTES,
   deriveBoxPublicKeyFromSeed,
+  deriveBoxPublicKeyFromSecretKey,
   deriveBoxSecretKeyFromSeed,
   openBoxBundle,
   sealBoxBundle,

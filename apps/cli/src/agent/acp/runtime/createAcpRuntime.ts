@@ -688,6 +688,16 @@ export function createAcpRuntime(params: {
    * durable row identity. Guarantees exactly-once projection across segments and retries.
    */
   const publishedTaskCompleteSummaryLocalIds = new Set<string>();
+  /**
+   * Assistant answers already delivered durably for the current logical dispatch.
+   *
+   * A dispatch is one client prompt plus the provider-autonomous continuations that follow it.
+   * Each continuation is projected as its own runtime turn, so per-turn state cannot tell a
+   * provider that restates its finished answer through `task_complete` apart from one that
+   * produces a genuinely new answer. Entries are exact trimmed answer bodies, never substrings,
+   * so a summary that merely mentions earlier text is still published.
+   */
+  const dispatchDeliveredAssistantAnswers = new Set<string>();
   let turnAborted = false;
   let pendingTurnOutcome: AcpTurnOutcome | null = null;
   let loadingSession = false;
@@ -2505,6 +2515,9 @@ export function createAcpRuntime(params: {
 
     beginTurn(): void {
       closeOpenStreamedTranscriptSegmentsBeforeTurn();
+      // A client prompt opens a new logical dispatch; a projected autonomous continuation stays
+      // inside the dispatch that produced it and keeps its delivered answers.
+      if (!autonomousContinuationInFlight) dispatchDeliveredAssistantAnswers.clear();
       turnInFlight = true;
       publishInFlightSteerCapabilities(true);
       turnAborted = false;
@@ -2903,7 +2916,17 @@ export function createAcpRuntime(params: {
 
     async flushTurn(): Promise<void> {
       let taskCompleteSummaryForDurableFallback: string | null = null;
-      if (!turnAborted && !accumulatedResponse.trim() && taskCompleteSummaryFallback) {
+      // A `task_complete` summary that exactly repeats an answer this dispatch already
+      // delivered is a restatement of the finished answer, not new output, so projecting it
+      // would publish the same answer twice for one prompt.
+      const summaryRestatesDispatchAnswer = taskCompleteSummaryFallback !== null
+        && dispatchDeliveredAssistantAnswers.has(taskCompleteSummaryFallback.trim());
+      if (
+        !turnAborted
+        && !accumulatedResponse.trim()
+        && taskCompleteSummaryFallback
+        && !summaryRestatesDispatchAnswer
+      ) {
         const summary = taskCompleteSummaryFallback;
         taskCompleteSummaryForDurableFallback = summary;
         handleAcpModelOutputDelta({
@@ -2956,6 +2979,7 @@ export function createAcpRuntime(params: {
         && !taskCompleteSummaryForDurableFallback
         && taskCompleteSummaryFallback
         && taskCompleteSummaryCallId
+        && !summaryRestatesDispatchAnswer
       ) {
         const summary = taskCompleteSummaryFallback;
         const alreadyVisible = accumulatedResponse.includes(summary.trim());
@@ -2967,7 +2991,14 @@ export function createAcpRuntime(params: {
             { type: 'message', message: summary },
             { localId },
           );
+          dispatchDeliveredAssistantAnswers.add(summary.trim());
         }
+      }
+      if (!turnAborted) {
+        // Remember what this turn actually delivered so a later continuation in the same
+        // dispatch can recognise its own answer being restated as a `task_complete` summary.
+        const deliveredAnswer = accumulatedResponse.trim();
+        if (deliveredAnswer) dispatchDeliveredAssistantAnswers.add(deliveredAnswer);
       }
       await abortPendingAcpPermissionRequests(
         params.permissionHandler,

@@ -7,6 +7,7 @@ import { Typography } from '@/constants/Typography';
 import { encodeBase64 } from '@/encryption/base64';
 import { generateAuthKeyPair, authQRStart } from '@/auth/flows/qrStart';
 import { authQRWait } from '@/auth/flows/qrWait';
+import { resolveAccountLinkCredentials, AccountLinkKeyFamilyError } from '@/auth/flows/resolveAccountLinkCredentials';
 import { buildAccountConnectDeepLink } from '@/auth/pairing/accountConnectUrl';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -158,8 +159,28 @@ export const RestoreQrView = React.memo(function RestoreQrView() {
                 );
 
                 if (credentials && !isCancelledRef.current) {
-                    const secretString = encodeBase64(credentials.secret, 'base64url');
-                    await auth.login(credentials.token, secretString);
+                    let resolved;
+                    try {
+                        resolved = await resolveAccountLinkCredentials({
+                            token: credentials.token,
+                            payload: credentials.secret,
+                        });
+                    } catch (error) {
+                        if (error instanceof AccountLinkKeyFamilyError) {
+                            if (!isCancelledRef.current) {
+                                Modal.alert(
+                                    t('connect.accountLinkKeyFamilyUnverifiedTitle'),
+                                    t('connect.accountLinkKeyFamilyUnverifiedBody'),
+                                );
+                            }
+                            return;
+                        }
+                        throw error;
+                    }
+                    if (isCancelledRef.current) {
+                        return;
+                    }
+                    await auth.loginWithCredentials(resolved);
                     if (!isCancelledRef.current) {
                         router.back();
                     }

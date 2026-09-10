@@ -219,6 +219,41 @@ describe('same-turn task_complete summary projection', () => {
     ).toBe(true);
   });
 
+  it('does not restate the dispatch answer when a continuation summary repeats it', async () => {
+    const h = await createHarness();
+    h.runtime.beginTurn();
+    h.backend.emit({
+      type: 'model-output',
+      textDelta: 'AUTO_R2_IDLE_RECOVER_080625Z',
+    } satisfies AgentMessage);
+    await h.runtime.flushTurn();
+
+    h.backend.emit({
+      type: 'event',
+      name: 'autonomous_continuation',
+      payload: { phase: 'started', continuationId: 'cont-restate' },
+    } satisfies AgentMessage);
+    h.backend.emit(taskCompleteCall('call_restate', 'AUTO_R2_IDLE_RECOVER_080625Z'));
+    h.backend.emit(toolResult('call_restate', { ok: true }));
+    h.backend.emit({
+      type: 'event',
+      name: 'autonomous_continuation',
+      payload: {
+        phase: 'ended',
+        continuationId: 'cont-restate',
+        reason: 'task_complete',
+        outcome: 'completed',
+        stallMs: 30_000,
+      },
+    } satisfies AgentMessage);
+    await h.runtime.waitForAutonomousContinuationIdle();
+
+    expect(
+      summaryRows(h, 'AUTO_R2_IDLE_RECOVER_080625Z'),
+      'a continuation that only restates the answer already delivered for this prompt must not add a second row',
+    ).toHaveLength(1);
+  });
+
   it('projects an independent summary for a following user prompt', async () => {
     const h = await createHarness();
     await runCommentaryThenSummary(h, {
@@ -236,6 +271,21 @@ describe('same-turn task_complete summary projection', () => {
     expect(summaryRows(h, 'TURN_TWO_SUMMARY')).toHaveLength(1);
     expect(summaryRows(h, 'TURN_ONE_SUMMARY')[0]?.localId)
       .not.toBe(summaryRows(h, 'TURN_TWO_SUMMARY')[0]?.localId);
+  });
+
+  it('keeps identical answers to two consecutive user prompts as separate rows', async () => {
+    const h = await createHarness();
+    for (const callId of ['call_prompt_one', 'call_prompt_two']) {
+      h.runtime.beginTurn();
+      h.backend.emit(taskCompleteCall(callId, 'SAME_ANSWER_BOTH_PROMPTS'));
+      h.backend.emit(toolResult(callId, { ok: true }));
+      await h.runtime.flushTurn();
+    }
+
+    expect(
+      summaryRows(h, 'SAME_ANSWER_BOTH_PROMPTS'),
+      'each independent user prompt owns its own answer row even when the text repeats',
+    ).toHaveLength(2);
   });
 
   it('still uses the empty-response fallback when there was no commentary', async () => {

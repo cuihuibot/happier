@@ -1358,6 +1358,8 @@ export const zhHans: TranslationStructure = {
     openMachine: "打开机器",
     terminalUrlPlaceholder: "happier://terminal?...",
     accountUrlPlaceholder: "happier:///account?...",
+    accountLinkKeyFamilyUnverifiedTitle: '无法验证此账户的加密密钥',
+    accountLinkKeyFamilyUnverifiedBody: '本设备无法确认该账户使用哪个加密密钥，因此停止操作，以免保存错误的密钥。请在已登录的设备上打开 设置 → 账户，确认同步完成后再次扫码。',
     restoreQrInstructions: "在已登录的设备上前往 设置 → 账户 并扫描此二维码。",
     externalAuthVerifiedTitle: ({ provider }: { provider: string }) =>
       `${provider} 验证完成`,
@@ -6726,6 +6728,7 @@ export const zhHans: TranslationStructure = {
       switchMode: "切换模式",
       taskOutput: "任务输出",
       taskStop: "停止任务",
+      taskComplete: "任务完成",
     },
     geminiExecute: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
