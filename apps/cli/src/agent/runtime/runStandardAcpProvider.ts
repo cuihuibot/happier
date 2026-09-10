@@ -12,7 +12,7 @@ import type {
   SessionProviderInputOutcomeProducer,
 } from '@/api/session/sessionClient';
 import { connectionState } from '@/api/offline/serverConnectionErrors';
-import type { MachineMetadata, Metadata, PermissionMode } from '@/api/types';
+import type { MachineMetadata, Metadata, PermissionMode, SessionLaunchOrigin } from '@/api/types';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/createProviderEnforcedPermissionHandler';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/ProviderEnforcedPermissionHandler';
 import { cleanupBackendRunResources } from '@/agent/runtime/cleanupBackendRunResources';
@@ -151,6 +151,12 @@ export type StandardAcpProviderConfig = {
     pendingQueueDrainMaxPopPerWake?: number;
     providerInputConsumer: SessionProviderInputConsumer<unknown, unknown>;
     turnAssistantPreviewTracker: TurnAssistantPreviewTracker;
+    /**
+     * Authoritative create-or-load origin for this launch, supplied by the
+     * common session initializer. Optional so existing runtime factories that
+     * do not consume it are unaffected; absent is equivalent to 'unknown'.
+     */
+    sessionLaunchOrigin?: SessionLaunchOrigin;
     startupOverrides?: {
       mode?: { modeId: string; updatedAt?: number } | null;
       model?: { modelId: string; updatedAt?: number } | null;
@@ -525,6 +531,7 @@ export async function runStandardAcpProvider(
     pendingQueueDrainMaxPopPerWake,
     providerInputConsumer: providerInputConsumer as SessionProviderInputConsumer<unknown, unknown>,
     turnAssistantPreviewTracker,
+    sessionLaunchOrigin: initializedSession.sessionLaunchOrigin,
   });
   runtime.drainPendingAfterStartOrLoad = async () => {
     await providerInputConsumer.drainPending({ reason: 'standard-acp-start-or-load' });

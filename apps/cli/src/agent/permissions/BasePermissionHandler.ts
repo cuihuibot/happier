@@ -14,6 +14,7 @@ import { updateAgentStateBestEffort as updateAgentStateBestEffortShared } from "
 import { isToolAllowedForSession, makeToolIdentifier } from './permissionToolIdentifier';
 import { applyAllowedToolsToAllowlist, applyUpdatedPermissionsToAllowlist, seedAllowlistFromCompletedRequests } from './applyPermissionAllowlistUpdates';
 import { recordToolTraceEvent, type ToolTraceProtocol } from '@/agent/tools/trace/toolTrace';
+import { flushSessionWithinAbortBudget } from '@/session/services/sessionAbortFlush';
 import type { AccountSettings } from '@happier-dev/protocol';
 import type {
     PermissionRequestPushSender as PermissionRequestPushSenderFromSettings,
@@ -679,7 +680,12 @@ export abstract class BasePermissionHandler {
     async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {
         this.cancelPendingRequests({ reason, decision: 'abort' });
         try {
-            await this.session.flush?.();
+            await flushSessionWithinAbortBudget({
+                owner: this.session,
+                flush: this.session.flush ? () => this.session.flush() : undefined,
+                logPrefix: this.getLogPrefix(),
+                reason,
+            });
         } catch (error) {
             logger.debug(`${this.getLogPrefix()} Failed to flush session after permission abort (non-fatal)`, error);
         }

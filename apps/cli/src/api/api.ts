@@ -11,7 +11,7 @@ import type {
   Metadata,
   Session,
 } from '@/api/types'
-import { MachineRegistrationIdentitySchema } from '@/api/types'
+import { MachineRegistrationIdentitySchema, readSessionLaunchOrigin } from '@/api/types'
 import { ApiSessionClient } from './session/sessionClient';
 import { ApiMachineClient } from './apiMachine';
 import { decodeBase64, encodeBase64, encrypt, decrypt } from './encryption';
@@ -477,6 +477,10 @@ export class ApiClient {
 
         logger.debug(`Session created/loaded: ${response.data.session.id} (tag: ${opts.tag})`)
         let raw = response.data.session;
+        // The server already reports whether it created or loaded this session.
+        // Validate only this discriminator: strict parsing of the whole envelope
+        // would reject additive fields from newer or older servers.
+        const launchOrigin = readSessionLaunchOrigin(response.data);
 
       const sessionEncryptionMode: 'e2ee' | 'plain' =
         (raw as any)?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
@@ -514,6 +518,7 @@ export class ApiClient {
 	        return {
 	          id: raw.id,
 	          seq: raw.seq,
+	          launchOrigin,
 	          ...readSessionRuntimeActivityProjectionBoundary(raw),
 	          encryptionMode: 'plain' as const,
 	          metadata,
@@ -526,6 +531,7 @@ export class ApiClient {
 	      return {
 	        id: raw.id,
 	        seq: raw.seq,
+	        launchOrigin,
 	        ...readSessionRuntimeActivityProjectionBoundary(raw),
 	        encryptionMode: 'e2ee' as const,
 	        encryptionKey: sessionEncryptionKey,

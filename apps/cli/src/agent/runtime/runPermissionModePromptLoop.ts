@@ -17,6 +17,7 @@ import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
 import { configuration } from '@/configuration';
 import { isAgentNativeResumeIdentityMismatchError } from '@/session/agentTransition/agentNativeReturn';
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers';
+import { delay } from '@/utils/time';
 import { readPendingLocalId } from '@happier-dev/protocol';
 import { readNewestSessionModelsMetadataStateV1 } from '@happier-dev/agents';
 import {
@@ -351,7 +352,16 @@ export async function runPermissionModePromptLoop(opts: {
           }
         },
       });
-      if (!next) continue;
+      if (!next) {
+        // A null batch can be produced without awaiting anything that reaches the macrotask
+        // queue: the input consumer returns immediately while the turn abort signal is aborted
+        // or while provider input admission is closed. Re-entering the loop on the microtask
+        // queue alone starves timers and I/O, including the abort corridor's own bounded flush
+        // budget, which is what installs the replacement abort signal that would end this state.
+        // Yield once so the loop can never monopolise the event loop while it waits.
+        await delay(0);
+        continue;
+      }
       message = {
         message: next.message,
         mode: next.mode,

@@ -296,10 +296,22 @@ export interface ClientToServerEvents {
 /**
  * Session information
  */
+/**
+ * Authoritative new-vs-existing origin for a launched session.
+ *
+ * The server reports `resolution: 'created' | 'existing'` on create-or-load.
+ * `unknown` covers an older server that omits the additive field and any value
+ * that fails validation; it must never be treated as evidence of a new session.
+ * This is a host-only field attached by the API reader, not a wire field.
+ */
+export type SessionLaunchOrigin = 'created' | 'existing' | 'unknown';
+
 type SessionSharedFields = Readonly<{
   id: string;
   seq: number;
   initialTranscriptAfterSeq?: number;
+  /** Host-only; absent for callers that did not obtain the session by create-or-load. */
+  launchOrigin?: SessionLaunchOrigin;
   metadata: Metadata;
   metadataVersion: number;
 	  agentState: AgentState | null;
@@ -445,6 +457,20 @@ export const CreateSessionResponseSchema = z.object({
 })
 
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>
+
+/**
+ * Reads the create-or-load origin discriminator from a session response body.
+ *
+ * Deliberately narrow: it validates only `resolution` and ignores every other
+ * field, so an older server that omits it and a newer server that adds unrelated
+ * fields both keep working. Anything that is not exactly `'created'` or
+ * `'existing'` is `'unknown'`, which callers must treat as "no evidence".
+ */
+export function readSessionLaunchOrigin(responseBody: unknown): SessionLaunchOrigin {
+  if (!responseBody || typeof responseBody !== 'object') return 'unknown'
+  const resolution = (responseBody as Readonly<Record<string, unknown>>).resolution
+  return resolution === 'created' || resolution === 'existing' ? resolution : 'unknown'
+}
 
 export const UserMessageSchema = z.object({
   role: z.literal('user'),
