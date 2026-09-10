@@ -86,4 +86,51 @@ describe('happier service copilot-sdk-experiment', () => {
     expect(stdout).toContain('host-wide');
     expect(stdout).toContain('happier service restart');
   });
+
+  /**
+   * `status` reports SAVED settings, not the state the running service is
+   * actually applying. Every status branch must therefore say that a service
+   * re-apply is required, otherwise an operator who has saved a change but not
+   * restarted reads it as already in effect.
+   */
+  describe('status distinguishes saved settings from applied service state', () => {
+    it('says a re-apply is required when the flight is enabled', async () => {
+      const { handleServiceCopilotSdkExperimentCliCommand } = await import('./serviceCopilotSdkExperiment');
+      await handleServiceCopilotSdkExperimentCliCommand({
+        argv: ['copilot-sdk-experiment', 'enable', '--cli-path', '/usr/local/bin/copilot'],
+        commandPath: 'happier service',
+      });
+      stdout = '';
+      await handleServiceCopilotSdkExperimentCliCommand({ argv: ['copilot-sdk-experiment', 'status'], commandPath: 'happier service' });
+
+      expect(stdout).toContain('enabled');
+      expect(stdout).toContain('Saved setting');
+      expect(stdout).toContain('happier service restart');
+    });
+
+    it('says a re-apply is required when the flight is disabled but the path is retained', async () => {
+      const { handleServiceCopilotSdkExperimentCliCommand } = await import('./serviceCopilotSdkExperiment');
+      await handleServiceCopilotSdkExperimentCliCommand({
+        argv: ['copilot-sdk-experiment', 'enable', '--cli-path', '/usr/local/bin/copilot'],
+        commandPath: 'happier service',
+      });
+      await handleServiceCopilotSdkExperimentCliCommand({ argv: ['copilot-sdk-experiment', 'disable'], commandPath: 'happier service' });
+      stdout = '';
+      await handleServiceCopilotSdkExperimentCliCommand({ argv: ['copilot-sdk-experiment', 'status'], commandPath: 'happier service' });
+
+      expect(stdout).toContain('disabled');
+      expect(stdout).toContain('Retained native Copilot CLI path');
+      expect(stdout).toContain('Saved setting');
+      expect(stdout).toContain('happier service restart');
+    });
+
+    it('says a re-apply is required when no flight was ever configured', async () => {
+      const { handleServiceCopilotSdkExperimentCliCommand } = await import('./serviceCopilotSdkExperiment');
+      await handleServiceCopilotSdkExperimentCliCommand({ argv: ['copilot-sdk-experiment', 'status'], commandPath: 'happier service' });
+
+      expect(stdout).toContain('disabled');
+      expect(stdout).toContain('Saved setting');
+      expect(stdout).toContain('happier service restart');
+    });
+  });
 });

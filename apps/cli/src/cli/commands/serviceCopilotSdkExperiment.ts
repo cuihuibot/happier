@@ -22,16 +22,24 @@ function readFlagValue(argv: readonly string[], flag: string): string | null {
   return inline ? inline.slice(flag.length + 1) : null;
 }
 
+/**
+ * Renders the SAVED setting.
+ *
+ * This reports persisted state, not what the running service is currently
+ * applying, so every branch states that a service re-apply is required.
+ * Omitting it from a branch would let an operator who saved a change but has
+ * not restarted read the output as already in effect.
+ */
 function writeStatus(state: CopilotSdkExperimentSettings | null): void {
   if (state?.newSessionOptIn) {
-    process.stdout.write(`Copilot SDK experiment: enabled\nNative Copilot CLI path: ${state.cliPath}\n${SCOPE_NOTICE}\n${APPLY_NOTICE}\n`);
+    process.stdout.write(`Saved setting — Copilot SDK experiment: enabled\nNative Copilot CLI path: ${state.cliPath}\n${SCOPE_NOTICE}\n${APPLY_NOTICE}\n`);
     return;
   }
   if (state) {
-    process.stdout.write(`Copilot SDK experiment: disabled\nNew sessions use the ACP default.\nRetained native Copilot CLI path: ${state.cliPath}\n${RETAINED_PATH_NOTICE}\n`);
+    process.stdout.write(`Saved setting — Copilot SDK experiment: disabled\nNew sessions use the ACP default.\nRetained native Copilot CLI path: ${state.cliPath}\n${RETAINED_PATH_NOTICE}\n${APPLY_NOTICE}\n`);
     return;
   }
-  process.stdout.write(`Copilot SDK experiment: disabled\nNew sessions use the ACP default.\n${SCOPE_NOTICE}\n`);
+  process.stdout.write(`Saved setting — Copilot SDK experiment: disabled\nNew sessions use the ACP default.\n${SCOPE_NOTICE}\n${APPLY_NOTICE}\n`);
 }
 
 /**
