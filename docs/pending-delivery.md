@@ -75,8 +75,12 @@ What is deliberately withheld:
 - Anything absent, malformed, or out of vocabulary. Each keeps the pre-existing
   generic code as the message.
 
-A send that publishes no reason at all is unaffected and still fails as
-`{"code":"timeout","message":"timeout"}`; no reason is invented.
+A send that publishes no reason at all keeps the originating generic
+code/message pair. In the bounded outer-scenario fixture this remained
+`{"code":"timeout","message":"timeout"}`, but the general no-reason contract is
+broader: when no publishable reason exists, the public envelope preserves the
+underlying generic failure such as `wait_failed` or `timeout`, and no reason is
+invented.
 
 The repair is local to the send path. `packages/protocol` was not changed, so no
 error disclosure was broadened across unrelated actions.
