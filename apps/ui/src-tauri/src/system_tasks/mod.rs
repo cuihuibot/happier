@@ -399,26 +399,8 @@ fn resolve_home_dir() -> Option<PathBuf> {
 }
 
 fn open_system_task_log_path(path: &Path) -> Result<(), String> {
-    let status = Command::new(resolve_open_log_path_program())
-        .arg(path)
-        .status()
-        .map_err(|error| format!("Failed to open log path: {error}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("Failed to open log path: {status}"))
-    }
-}
-
-fn resolve_open_log_path_program() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
-    }
+    crate::os_open::spawn_os_open(path.as_os_str())
+        .map_err(|error| format!("Failed to open log path: {error}"))
 }
 
 fn kill_child(child: &SharedChild) {
@@ -743,7 +725,7 @@ mod tests {
 
     #[test]
     fn resolve_open_log_path_program_uses_the_platform_file_manager() {
-        let program = super::resolve_open_log_path_program();
+        let program = crate::os_open::resolve_os_open_program();
 
         #[cfg(target_os = "macos")]
         assert_eq!(program, "open");
