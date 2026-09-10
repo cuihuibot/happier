@@ -1662,9 +1662,17 @@ export function createCliActionDeps(params: Readonly<{
         // vocabulary may widen it; anything absent, unknown, malformed or
         // attacker-shaped keeps the pre-existing generic code, and the service
         // `message` is never forwarded because it can carry provider prose.
-        const publishableBlockedReason = normalizePendingDeliveryBlockedReason(
+        //
+        // `unknown` is a real vocabulary member that the upstream projection
+        // parser also uses as its catch-all for an unrecognized server reason,
+        // so it is deliberately NOT disclosable: publishing it would turn an
+        // unparsed reason into an apparently authoritative diagnosis.
+        const normalizedBlockedReason = normalizePendingDeliveryBlockedReason(
           (res as Readonly<Record<string, unknown>>).blockedDeliveryReason,
         );
+        const publishableBlockedReason = normalizedBlockedReason === 'unknown'
+          ? null
+          : normalizedBlockedReason;
         return {
           ok: false,
           errorCode: res.code,

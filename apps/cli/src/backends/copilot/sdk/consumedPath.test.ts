@@ -232,6 +232,13 @@ describe('copilot SDK vertical through the real factory and canonical runtime', 
     const scratch = createSpikeScratchDir('consumed-sink');
     const sinkPath = join(scratch.path, 'usage.jsonl');
     const c = composition(createTestMetadata(), { HAPPIER_COPILOT_SDK_USAGE_SINK: sinkPath });
+    // The runtime writes a terminal accounting record while it is disposed, which
+    // happens in afterEach. Removing the directory inline at the end of this test
+    // body deleted the sink out from under that write, so the run reported a
+    // genuine ENOENT accounting failure that belonged to the fixture, not the
+    // product. Registering cleanup on the shared stack after the runtime's own
+    // reset keeps the sink alive until its last writer is gone.
+    cleanups.push(async () => scratch.cleanup());
     await c.runtime.startOrLoad({});
 
     emit('assistant.usage', {
@@ -247,8 +254,6 @@ describe('copilot SDK vertical through the real factory and canonical runtime', 
     expect(raw).not.toContain('SECRET PROMPT');
     const record = JSON.parse(raw.trim()) as Record<string, unknown>;
     expect(record).toMatchObject({ apiCallId: 'spike-consumed-1', totalTokens: 3 });
-    // Removes the owned directory, not only the file inside it.
-    scratch.cleanup();
   });
 
   it('D6: reaching the ceiling mid-turn stops the in-flight native turn', async () => {
