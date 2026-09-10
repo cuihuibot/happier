@@ -163,4 +163,39 @@ describe('copilot runtime seam', () => {
       } as never),
     ).toThrow(/unreadable persisted backend transport/i);
   });
+
+  // Installed-path acceptance for the experimental flight failed and the
+  // investigation could not tell "the SDK was never selected" apart from "the
+  // SDK was selected and the native session failed": the runner log for the
+  // failing session carried no selection line at all.
+  //
+  // Only the UNHONORED opt-in was reported by default. The honored decision was
+  // emitted at `debug`, which is off for product session runners (the daemon
+  // raises the level to debug only for the stack process kind), so the decision
+  // this flight exists to make was invisible on the exact path operators use.
+  //
+  // The selection line must therefore be observable on a default-on signal.
+  it('reports the resolved runtime selection on a default-on signal', async () => {
+    const { logger } = await import('@/ui/logger');
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    try {
+      const { createCopilotRuntime } = await import('./runtimeFactory');
+
+      createCopilotRuntime({
+        ...baseParams(),
+        sessionLaunchOrigin: 'existing',
+        processEnv: {} as NodeJS.ProcessEnv,
+      } as never);
+
+      const selectionLines = info.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes('runtime selection resolved'));
+
+      expect(selectionLines).toHaveLength(1);
+      expect(selectionLines[0]).toContain('kind=acp');
+      expect(selectionLines[0]).toContain('origin=existing');
+    } finally {
+      info.mockRestore();
+    }
+  });
 });

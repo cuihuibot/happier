@@ -49,7 +49,7 @@ export function createCopilotRuntime(
 
   // Selection must be observable by default: a session that silently ran the
   // wrong runtime is otherwise indistinguishable in the logs.
-  logger.debug(
+  logger.info(
     `[copilot] runtime selection resolved kind=${selected} affinity=${existingBackendAffinity ?? 'none'} origin=${params.sessionLaunchOrigin ?? 'unknown'}`,
   );
 
