@@ -370,7 +370,7 @@ class Logger {
   debug(message: string, ...args: unknown[]): void {
     // Near-zero-cost when debug file logging is disabled: no timestamp, no stringify.
     if (!this.debugFileEnabled) return
-    this.logToFile(`[${this.localTimezoneTimestamp()}]`, message, ...args)
+    this.logToFile('debug', `[${this.localTimezoneTimestamp()}]`, message, ...args)
   }
 
   debugLargeJson(
@@ -440,18 +440,18 @@ class Logger {
     } catch {
       json = inspect(truncatedObject, { depth: 8, maxArrayLength })
     }
-    this.logToFile(`[${this.localTimezoneTimestamp()}]`, message, '\n', json)
+    this.logToFile('debug', `[${this.localTimezoneTimestamp()}]`, message, '\n', json)
   }
 
   info(message: string, ...args: unknown[]): void {
     this.logToConsole('info', '', message, ...args)
     if (!this.infoFileEnabled) return
-    this.logToFile(`[${this.localTimezoneTimestamp()}]`, message, ...args)
+    this.logToFile('info', `[${this.localTimezoneTimestamp()}]`, message, ...args)
   }
 
   infoFile(message: string, ...args: unknown[]): void {
     if (!this.infoFileEnabled) return
-    this.logToFile(`[${this.localTimezoneTimestamp()}]`, message, ...args)
+    this.logToFile('info', `[${this.localTimezoneTimestamp()}]`, message, ...args)
   }
 
   infoDeveloper(message: string, ...args: unknown[]): void {
@@ -467,7 +467,20 @@ class Logger {
   warn(message: string, ...args: unknown[]): void {
     this.logToConsole('warn', '', message, ...args)
     if (!this.warnFileEnabled) return
-    this.logToFile(`[${this.localTimezoneTimestamp()}]`, `[WARN] ${message}`, ...args)
+    this.logToFile('warn', `[${this.localTimezoneTimestamp()}]`, `[WARN] ${message}`, ...args)
+  }
+
+  /**
+   * File-only counterpart of `warn`, mirroring `infoFile`.
+   *
+   * Agent-session paths share stdout with the provider terminal UI, so a
+   * warning raised there must not reach the console. Keeping warn severity
+   * (rather than degrading to `infoFile`) matters because an operator running
+   * at `HAPPIER_LOG_LEVEL=warn` is asking to see failures and nothing else.
+   */
+  warnFile(message: string, ...args: unknown[]): void {
+    if (!this.warnFileEnabled) return
+    this.logToFile('warn', `[${this.localTimezoneTimestamp()}]`, `[WARN] ${message}`, ...args)
   }
 
   /**
@@ -538,7 +551,7 @@ class Logger {
     }
   }
 
-  private async sendToRemoteServer(level: string, message: string, ...args: unknown[]): Promise<void> {
+  private async sendToRemoteServer(level: Exclude<FileLogLevel, 'silent'>, message: string, ...args: unknown[]): Promise<void> {
     if (!this.dangerouslyUnencryptedServerLoggingUrl) return
 
     try {
@@ -566,7 +579,7 @@ class Logger {
     }
   }
 
-  private logToFile(prefix: string, message: string, ...args: unknown[]): void {
+  private logToFile(level: Exclude<FileLogLevel, 'silent'>, prefix: string, message: string, ...args: unknown[]): void {
     const logLine = `${prefix} ${message} ${args.map(arg => {
       if (typeof arg === 'string') return arg
       if (arg instanceof Error) return arg.stack || arg.message
@@ -581,11 +594,9 @@ class Logger {
 
     // Send to remote server if configured
     if (this.dangerouslyUnencryptedServerLoggingUrl) {
-      // Determine log level from prefix
-      let level = 'info'
-      if (prefix.includes(this.localTimezoneTimestamp())) {
-        level = 'debug'
-      }
+      // Severity is known at the call site. Inferring it from the formatted text
+      // silently mislabelled every record: each caller passes a timestamped
+      // prefix, so a WARN was forwarded as 'debug'.
       // Fire and forget, with explicit .catch to prevent unhandled rejection
       this.sendToRemoteServer(level, message, ...args).catch(() => {
         // Silently ignore remote logging errors to prevent loops

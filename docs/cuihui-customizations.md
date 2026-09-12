@@ -437,14 +437,34 @@ Current source basis for this operator route: `apps/cli/src/cli/commands/service
 
 ### Observing which backend a session selected
 
+The older `952e5a6b` references below are historical. In the current unreleased
+PR7 source candidate `98700c78` (not already deployed by this document), the
+selection and native-error observability path changed:
+
 - The resolved selection is logged as
   `[copilot] runtime selection resolved kind=<acp|sdk> affinity=<acp|sdk|none> origin=<created|existing|unknown>`
-  at **debug** level. Session processes default to file log level `info`, so set
-  `HAPPIER_LOG_LEVEL=debug` (or `DEBUG`) for the session process to see it;
-  daemon processes already default to `debug`. Logs are written under
+  on the **file-only `info` sink**. Session processes therefore emit it at the
+  default file log level `info` without requiring `HAPPIER_LOG_LEVEL=debug`.
+  No console `info`, console `warn`, stdout, or stderr signal is added. At
+  `HAPPIER_LOG_LEVEL=warn`, the native error warning below remains but this
+  selection line is omitted; `silent` suppresses both. Logs are written under
   `$HAPPIER_HOME_DIR/logs/`.
-- An opt-in that could not be honored is logged at **info** by default:
+- An opt-in that could not be honored is likewise logged on the file-only
+  `info` sink by default:
   `[copilot] Copilot SDK experiment requested but not applied: session launch origin is "<origin>" ...`.
+- A native `session.error` is logged on the file-only `warn` sink as
+  `[copilot-sdk] native session error: ...`. The logged detail is a bounded
+  projection for this sink, not the raw provider body: it passes through the
+  canonical `redactBugReportSensitiveText`, strips **C0, DEL, and C1** control
+  characters, keeps at most 300 characters of detail after redaction, and
+  admits a native `code` token only when it survives the canonical
+  `hasNamedCredentialTokenPrefix` rejection plus the owner's additional code
+  shape checks. That same bounded file-sink projection, with its explicit
+  `warn`/`info`/`debug` severity preserved by the logger rather than inferred
+  from timestamped text, is what any already-enabled optional remote log
+  forwarding would receive. This is not a claim that all possible secrets or PII
+  are always detected, not a general claim that every caller-facing surface is
+  redacted, and not an independent security approval.
 - The durable record lives in session metadata as `agentRuntimeDescriptorV1`
   with `providerId: "copilot"` and `provider.backendMode` of `acp` or `sdk`.
   `copilotSessionId` is the native **vendor** resume identity and is written by
