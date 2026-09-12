@@ -438,7 +438,7 @@ Current source basis for this operator route: `apps/cli/src/cli/commands/service
 ### Observing which backend a session selected
 
 The older `952e5a6b` references below are historical. In the current unreleased
-PR7 source candidate `d7d58698` (not already deployed by this document), the
+PR7 source candidate `98700c78` (not already deployed by this document), the
 selection and native-error observability path changed:
 
 - The resolved selection is logged as
@@ -455,12 +455,16 @@ selection and native-error observability path changed:
 - A native `session.error` is logged on the file-only `warn` sink as
   `[copilot-sdk] native session error: ...`. The logged detail is a bounded
   projection for this sink, not the raw provider body: it passes through the
-  canonical `redactBugReportSensitiveText`, strips control characters, keeps at
-  most 300 characters of detail after redaction, and retains only a short
-  safe-shaped native `code` token. That same bounded file-sink projection is
-  what any already-enabled optional remote log forwarding would receive; this is
-  not a general claim that every caller-facing surface is redacted or an
-  independent security approval.
+  canonical `redactBugReportSensitiveText`, strips **C0, DEL, and C1** control
+  characters, keeps at most 300 characters of detail after redaction, and
+  admits a native `code` token only when it survives the canonical
+  `hasNamedCredentialTokenPrefix` rejection plus the owner's additional code
+  shape checks. That same bounded file-sink projection, with its explicit
+  `warn`/`info`/`debug` severity preserved by the logger rather than inferred
+  from timestamped text, is what any already-enabled optional remote log
+  forwarding would receive. This is not a claim that all possible secrets or PII
+  are always detected, not a general claim that every caller-facing surface is
+  redacted, and not an independent security approval.
 - The durable record lives in session metadata as `agentRuntimeDescriptorV1`
   with `providerId: "copilot"` and `provider.backendMode` of `acp` or `sdk`.
   `copilotSessionId` is the native **vendor** resume identity and is written by
