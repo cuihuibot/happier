@@ -44,12 +44,14 @@ export function createCopilotRuntime(
     sessionLaunchOrigin: params.sessionLaunchOrigin ?? 'unknown',
     // An unhonored opt-in must be visible by default: otherwise an operator who
     // asked for the SDK cannot tell that the run silently stayed on ACP.
-    onDiagnostic: (message) => logger.info(`[copilot] ${message}`),
+    // File-only: this path shares stdout with the provider terminal UI.
+    onDiagnostic: (message) => logger.infoFile(`[copilot] ${message}`),
   });
 
   // Selection must be observable by default: a session that silently ran the
-  // wrong runtime is otherwise indistinguishable in the logs.
-  logger.info(
+  // wrong runtime is otherwise indistinguishable in the logs. File-only for the
+  // same reason as the diagnostic above.
+  logger.infoFile(
     `[copilot] runtime selection resolved kind=${selected} affinity=${existingBackendAffinity ?? 'none'} origin=${params.sessionLaunchOrigin ?? 'unknown'}`,
   );
 

@@ -17,6 +17,7 @@ import { CopilotClient, RuntimeConnection } from '@github/copilot-sdk';
 
 import type { AcpPromptSubmissionEvidence } from '@/agent/acp/AcpBackend';
 import { createSanitizedBoundaryFailure, markTurnFailure } from '@/agent/executionRuns/runtime/turnDelivery';
+import { describeNativeSessionErrorForLog } from '@/backends/copilot/sdk/nativeErrorDiagnostic';
 import type {
   PermissionRequest as SdkPermissionRequest,
   ResumeSessionConfig,
@@ -480,7 +481,10 @@ export function createCopilotSdkBackend(params: CopilotSdkBackendParams) {
       // The canonical owner sanitizes this to the fixed preview "Provider
       // session failed", so without a default-on report here a failed turn is
       // indistinguishable from any other provider failure in production.
-      logger.warn(`[copilot-sdk] native session error: ${message}`);
+      // File-only and projected: the body is provider-controlled, and this path
+      // shares stdout with the provider terminal UI. The unabridged message
+      // still reaches the turn outcome below for caller-facing handling.
+      logger.warnFile(`[copilot-sdk] native session error: ${describeNativeSessionErrorForLog(data)}`);
       recordTurnOutcome({
         kind: 'failed',
         error: new Error(`Copilot SDK backend: native session error: ${message}`),

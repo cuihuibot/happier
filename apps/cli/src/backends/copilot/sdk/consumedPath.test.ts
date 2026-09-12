@@ -470,23 +470,33 @@ describe('copilot SDK backend fault, settlement and permission boundaries', () =
   // sanitizes it to the fixed preview "Provider session failed" without logging
   // the detail at any level. An installed acceptance run therefore produced a
   // failed turn whose cause could not be recovered from any signal. The native
-  // message must be reported on a default-on signal.
-  it('D3: a native session error is reported on a default-on signal', async () => {
+  // failure must be reported on a default-on FILE signal, and the
+  // provider-controlled body must never be copied into it verbatim.
+  it('D3: a native session error is reported on a default-on file signal without the raw body', async () => {
     const { logger } = await import('@/ui/logger');
+    const warnFile = vi.spyOn(logger, 'warnFile').mockImplementation(() => undefined);
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
     try {
       const b = backend();
       await b.startSession();
       emit('session.error', { message: 'SPIKE-native-failure-detail' });
       await tick();
 
-      const reported = warn.mock.calls
+      const reported = warnFile.mock.calls
         .map((call) => call.map((part) => String(part)).join(' '))
-        .filter((line) => line.includes('SPIKE-native-failure-detail'));
+        .filter((line) => line.includes('native session error'));
       expect(reported).toHaveLength(1);
       expect(reported[0]).toContain('[copilot-sdk]');
+      // The bounded projection, not the raw body.
+      expect(reported[0]).toContain('detail=');
+      // No console-writing logger method may be used on this path.
+      expect(warn).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
     } finally {
+      info.mockRestore();
       warn.mockRestore();
+      warnFile.mockRestore();
     }
   });
 

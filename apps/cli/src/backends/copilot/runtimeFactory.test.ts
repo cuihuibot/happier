@@ -174,10 +174,14 @@ describe('copilot runtime seam', () => {
   // raises the level to debug only for the stack process kind), so the decision
   // this flight exists to make was invisible on the exact path operators use.
   //
-  // The selection line must therefore be observable on a default-on signal.
-  it('reports the resolved runtime selection on a default-on signal', async () => {
+  // The selection line must therefore be observable on a default-on signal --
+  // but on the FILE sink only: this path shares stdout with the provider
+  // terminal UI, which `apps/cli/AGENTS.md` forbids disturbing.
+  it('reports the resolved runtime selection on a default-on file signal', async () => {
     const { logger } = await import('@/ui/logger');
+    const infoFile = vi.spyOn(logger, 'infoFile').mockImplementation(() => undefined);
     const info = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
     try {
       const { createCopilotRuntime } = await import('./runtimeFactory');
 
@@ -187,15 +191,20 @@ describe('copilot runtime seam', () => {
         processEnv: {} as NodeJS.ProcessEnv,
       } as never);
 
-      const selectionLines = info.mock.calls
+      const selectionLines = infoFile.mock.calls
         .map((call) => String(call[0]))
         .filter((line) => line.includes('runtime selection resolved'));
 
       expect(selectionLines).toHaveLength(1);
       expect(selectionLines[0]).toContain('kind=acp');
       expect(selectionLines[0]).toContain('origin=existing');
+      // No console-writing logger method may be used on this path.
+      expect(info).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
     } finally {
+      warn.mockRestore();
       info.mockRestore();
+      infoFile.mockRestore();
     }
   });
 });

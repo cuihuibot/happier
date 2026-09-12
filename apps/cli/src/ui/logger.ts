@@ -471,6 +471,19 @@ class Logger {
   }
 
   /**
+   * File-only counterpart of `warn`, mirroring `infoFile`.
+   *
+   * Agent-session paths share stdout with the provider terminal UI, so a
+   * warning raised there must not reach the console. Keeping warn severity
+   * (rather than degrading to `infoFile`) matters because an operator running
+   * at `HAPPIER_LOG_LEVEL=warn` is asking to see failures and nothing else.
+   */
+  warnFile(message: string, ...args: unknown[]): void {
+    if (!this.warnFileEnabled) return
+    this.logToFile(`[${this.localTimezoneTimestamp()}]`, `[WARN] ${message}`, ...args)
+  }
+
+  /**
    * Persist an unhandled CLI failure before a detached runner exits. This deliberately
    * records only sanitized Error text: enumerable fields can contain argv or environment
    * snapshots and are never serialized. The write and synchronous drain are best-effort.
