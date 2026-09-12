@@ -3414,6 +3414,7 @@ export {
   normalizeBugReportIssueTarget,
   normalizeBugReportProviderUrl,
   normalizeBugReportReproductionSteps,
+  hasNamedCredentialTokenPrefix,
   pushBugReportArtifact,
   redactBugReportSensitiveText,
   resolveBugReportIssueTargetWithDefaults,

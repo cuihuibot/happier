@@ -26,7 +26,7 @@ export {
   normalizeBugReportIssueTarget,
   resolveBugReportIssueTargetWithDefaults,
 } from './bugReports/issueTarget.js';
-export { redactBugReportSensitiveText, trimBugReportTextToMaxBytes } from './bugReports/redaction.js';
+export { hasNamedCredentialTokenPrefix, redactBugReportSensitiveText, trimBugReportTextToMaxBytes } from './bugReports/redaction.js';
 export { hasAcceptedBugReportArtifactKind, pushBugReportArtifact } from './bugReports/artifacts.js';
 export { normalizeBugReportReproductionSteps, formatBugReportFallbackIssueBody, buildBugReportFallbackIssueUrl } from './bugReports/fallback.js';
 export { appendBugReportReporterToSummary, normalizeBugReportGithubUsername } from './bugReports/reporter.js';
