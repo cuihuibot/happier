@@ -43,7 +43,10 @@ vi.mock('@github/copilot-sdk', () => ({
 // Synthetic hostile payload: a fake credential shape, an ANSI erase sequence and
 // a bell. Never a real secret.
 const HOSTILE_TOKEN = 'sk-test-NOTREAL-0123456789abcdefghij';
-const HOSTILE_NATIVE_MESSAGE = `authorization: Bearer ${HOSTILE_TOKEN}\u001b[2J\u0007 upstream refused`;
+// Synthetic GitHub-shaped token placed in `code`, which is admitted separately
+// from `message`. Never a real credential.
+const HOSTILE_CODE = `ghp_${'A'.repeat(36)}`;
+const HOSTILE_NATIVE_MESSAGE = `authorization: Bearer ${HOSTILE_TOKEN}\u001b[2J\u0007\u009b2J upstream refused`;
 
 const SELECTION_MARKER = 'runtime selection resolved';
 const NATIVE_MARKER = 'native session error';
@@ -118,6 +121,7 @@ describe('copilot runtime diagnostics sink contract', () => {
   async function emitNativeError(
     createCopilotSdkBackend: typeof import('@/backends/copilot/sdk/backend').createCopilotSdkBackend,
     message: unknown,
+    code?: unknown,
   ): Promise<void> {
     const backend = createCopilotSdkBackend({
       cliPath: '/diagnostics/never-launch',
@@ -135,7 +139,7 @@ describe('copilot runtime diagnostics sink contract', () => {
     if (typeof onEvent !== 'function') throw new Error('native transport is not open');
     (onEvent as (event: { type: string; data: unknown }) => void)({
       type: 'session.error',
-      data: { message },
+      data: code === undefined ? { message } : { message, code },
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
     await backend.dispose().catch(() => {});
@@ -188,18 +192,20 @@ describe('copilot runtime diagnostics sink contract', () => {
   it('never writes a hostile native payload to any sink', async () => {
     const { logger, createCopilotSdkBackend } = await loadAt('debug');
 
-    await emitNativeError(createCopilotSdkBackend, HOSTILE_NATIVE_MESSAGE);
+    await emitNativeError(createCopilotSdkBackend, HOSTILE_NATIVE_MESSAGE, HOSTILE_CODE);
 
     const file = fileText(logger);
     const consoleText = console_?.text() ?? '';
 
     // The failure is still reported ...
     expect(file).toContain(NATIVE_MARKER);
-    // ... but the credential shape never reaches a sink ...
+    // ... but neither credential shape reaches a sink, in `message` or `code` ...
     expect(file).not.toContain(HOSTILE_TOKEN);
+    expect(file).not.toContain(HOSTILE_CODE);
     expect(consoleText).not.toContain(HOSTILE_TOKEN);
-    // ... and no control sequence survives into a file an operator will `cat`.
-    expect(file).not.toContain('\u001b[2J');
-    expect(file).not.toContain('\u0007');
+    expect(consoleText).not.toContain(HOSTILE_CODE);
+    // ... and no C0, DEL or C1 control sequence survives into a file an
+    // operator will `cat`. U+009B is the 8-bit CSI introducer.
+    expect(file).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u);
   });
 });

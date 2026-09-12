@@ -61,6 +61,59 @@ describe('describeNativeSessionErrorForLog', () => {
     ).toContain('code=none');
   });
 
+  // IQE-01: character-class admission is not secret redaction. A synthetic
+  // GitHub token is made only of characters the shape allows, so it passed the
+  // regex and was logged verbatim to file, console and the remote sink. Codes
+  // must clear canonical credential rejection BEFORE shape admission.
+  it('rejects a credential-shaped code instead of admitting it by character class', () => {
+    // Synthetic, never a real credential.
+    const syntheticGithubToken = `ghp_${'A'.repeat(36)}`;
+    const described = describeNativeSessionErrorForLog({ code: syntheticGithubToken });
+
+    expect(described).not.toContain(syntheticGithubToken);
+    expect(described).toContain('code=none');
+  });
+
+  it('rejects other named credential prefixes and long opaque runs', () => {
+    for (const synthetic of [
+      `github_pat_${'B'.repeat(40)}`,
+      `glpat-${'C'.repeat(20)}`,
+      `xoxb-${'1'.repeat(24)}`,
+      `sk-${'D'.repeat(32)}`,
+      `AKIA${'E'.repeat(16)}`,
+      `9f3b2c7d4e8a1b6c5d0e7f2a`,
+    ]) {
+      const described = describeNativeSessionErrorForLog({ code: synthetic });
+      expect(described).not.toContain(synthetic);
+      expect(described).toContain('code=none');
+    }
+  });
+
+  it('still retains genuinely useful non-sensitive codes', () => {
+    for (const code of [
+      'session_failed',
+      'ECONNRESET',
+      'rate_limit_exceeded',
+      'copilot.session.error',
+      'HTTP-503',
+    ]) {
+      expect(describeNativeSessionErrorForLog({ code })).toContain(`code=${code}`);
+    }
+  });
+
+  // IQE DOC-01: the original intent is to prevent control SEQUENCES reaching a
+  // sink. An 8-bit CSI introducer (U+009B) drives a terminal exactly like the
+  // 7-bit ESC[ form, so the C1 range must be stripped as well as C0/DEL.
+  it('strips C1 control characters including the 8-bit CSI introducer', () => {
+    const described = describeNativeSessionErrorForLog({
+      message: 'boom\u009b2Jwiped\u0085more\u009fend',
+    });
+
+    expect(described).not.toMatch(/[\u0080-\u009f]/u);
+    expect(described).toContain('boom');
+    expect(described).toContain('end');
+  });
+
   it('never returns the raw non-string payload shape', () => {
     const described = describeNativeSessionErrorForLog({ message: { nested: 'PROMPT-TEXT' } });
 

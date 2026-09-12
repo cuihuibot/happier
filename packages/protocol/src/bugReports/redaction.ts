@@ -230,6 +230,22 @@ function looksLikeOpaqueCredential(value: string): boolean {
   return value.length >= 12 && /[^A-Za-z]/.test(value);
 }
 
+/**
+ * Does this value carry a publicly documented credential prefix?
+ *
+ * This is the definitive half of `looksLikeOpaqueCredential`: a `ghp_`, `sk-`, `AKIA`
+ * or similar prefix identifies a credential regardless of surrounding context. It is
+ * exported for callers that must REJECT a standalone field value rather than rewrite
+ * it, because `redactBugReportSensitiveText` can only rewrite a credential it can
+ * locate from surrounding key context, and a bare token used as a field value has
+ * none. The length/non-letter heuristic is deliberately NOT exported: it exists only
+ * to disambiguate the two key shapes above, and treats ordinary identifiers such as
+ * `session_failed` as credentials.
+ */
+export function hasNamedCredentialTokenPrefix(value: string): boolean {
+  return NAMED_TOKEN_PREFIX_PATTERN.test(value.trim());
+}
+
 type ValueScanner = (text: string, valueStart: number) => number;
 
 /**
