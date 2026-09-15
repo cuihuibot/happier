@@ -298,6 +298,26 @@ function resolvePermissionActionabilityRecheckMs(): number {
   );
 }
 
+/**
+ * Actionability history of one pending permission decision.
+ *
+ * It is owned per request and per turn generation because losing actionability only
+ * means something for the exact request that had it: a replacement prompt registered
+ * after an earlier one disappeared is a new, possibly still-unpublished question and
+ * must earn its own grace rather than inherit the previous prompt's history.
+ */
+type PendingPermissionDecisionState = {
+  /** The turn that registered this request; an older turn never speaks for a newer one. */
+  turnGeneration: number;
+  /** Whether this exact request was ever observed answerable. */
+  sawActionable: boolean;
+  /** Consecutive rechecks that found this request unanswerable after it had been answerable. */
+  lossObservations: number;
+};
+
+/** Consecutive rechecks required before a request counts as having lost actionability. */
+const PERMISSION_ACTIONABILITY_LOSS_CONFIRMATIONS = 2;
+
 function resolveResponseCompletionStallMs(transport: TransportHandler): number {
   const transportValue = transport.getResponseCompletionStallMs?.();
   if (typeof transportValue === 'number' && Number.isFinite(transportValue) && transportValue > 0) {
@@ -2819,14 +2839,10 @@ export class AcpBackend implements AgentBackend {
   private responseCompletionTimeoutMs: number | null = null;
   private responseCompletionTimeout: NodeJS.Timeout | null = null;
   private responseCompletionTimeoutRejecter: (() => void) | null = null;
-  /** Permission decisions currently awaiting a human answer on this backend. */
-  private pendingPermissionDecisionIds = new Set<string>();
+  /** Permission decisions currently awaiting a human answer, with their own history. */
+  private pendingPermissionDecisions = new Map<string, PendingPermissionDecisionState>();
   /** The single recheck timer; non-null only while a permission decision is pending. */
   private permissionActionabilityTimer: NodeJS.Timeout | null = null;
-  /** Whether any pending prompt in this wait was ever observed as answerable. */
-  private sawActionablePendingPermission = false;
-  /** Consecutive rechecks that found no answerable prompt after one was seen. */
-  private permissionActionabilityLossObservations = 0;
   /**
    * Whether the active wait uses the implicit default stall budget rather than a
    * ceiling the caller chose. Only the implicit budget is suspended for permission
@@ -2874,10 +2890,12 @@ export class AcpBackend implements AgentBackend {
       clearTimeout(this.responseCompletionTimeout);
       this.responseCompletionTimeout = null;
     }
-    this.stopPermissionActionabilityRecheck();
-    this.sawActionablePendingPermission = false;
     this.responseCompletionTimeoutMs = null;
     this.responseCompletionTimeoutRejecter = null;
+    // Stall ownership belongs to the wait that established it. Leaving it behind let a
+    // finished implicit wait arm permission rechecks inside a later explicit ceiling.
+    this.responseCompletionStallIsImplicit = false;
+    this.syncPermissionActionabilityRecheck();
   }
 
   private closeCurrentTurnGeneration(): void {
@@ -3294,17 +3312,23 @@ export class AcpBackend implements AgentBackend {
   }
 
   /**
+   * Whether one pending request is provably published and actionable. An absent
+   * predicate means the handler cannot distinguish, so the request is trusted.
+   */
+  private isPendingPermissionRequestActionable(requestId: string): boolean {
+    const isActionable = this.options.permissionHandler?.isPendingRequestActionable;
+    if (typeof isActionable !== 'function') return true;
+    return Boolean(isActionable.call(this.options.permissionHandler, requestId));
+  }
+
+  /**
    * Whether some pending permission decision is provably published and actionable, and
    * therefore explains the provider's silence. Unverifiable or orphaned prompts are
    * deliberately excluded so they cannot suspend the watchdog forever.
    */
   private hasActionablePendingPermissionDecision(): boolean {
-    if (this.pendingPermissionDecisionIds.size === 0) return false;
-    const isActionable = this.options.permissionHandler?.isPendingRequestActionable;
-    if (typeof isActionable !== 'function') return true;
-    const handler = this.options.permissionHandler;
-    for (const requestId of this.pendingPermissionDecisionIds) {
-      if (isActionable.call(handler, requestId)) return true;
+    for (const requestId of this.pendingPermissionDecisions.keys()) {
+      if (this.isPendingPermissionRequestActionable(requestId)) return true;
     }
     return false;
   }
@@ -3354,46 +3378,95 @@ export class AcpBackend implements AgentBackend {
   }
 
   /**
-   * Runs the recheck loop while at least one permission decision is pending. It only ever
-   * observes actionability; it never decides, denies or approves a prompt, and it imposes
-   * no deadline on a person, because an actionable prompt simply keeps the loop running.
+   * Starts or stops the recheck loop from the state that decides whether it may act.
    *
-   * Losing actionability is only terminal for a prompt that *had* it: a request that has
-   * never been published yet may still be mid-write, so that case keeps the ordinary
-   * stall budget as its grace period. The loss must also be seen on two consecutive
-   * rechecks, which costs one interval and removes the narrow window where a prompt has
-   * just been answered but `endPendingPermissionDecision()` has not run yet.
+   * The loop's only terminal action is spending the implicit stall budget, so it runs
+   * exactly while this wait owns that budget and has something to observe. Reconciling
+   * instead of starting and stopping at call sites is what keeps an explicit caller
+   * ceiling, or a `null`/`0` opt-out, free of a recheck armed by an earlier wait.
    */
-  private startPermissionActionabilityRecheck(): void {
+  private syncPermissionActionabilityRecheck(): void {
+    const shouldRun =
+      this.waitingForResponse &&
+      this.responseCompletionStallIsImplicit &&
+      this.responseCompletionTimeoutRejecter !== null &&
+      this.pendingPermissionDecisions.size > 0;
+    if (!shouldRun) {
+      this.stopPermissionActionabilityRecheck();
+      return;
+    }
     if (this.permissionActionabilityTimer) return;
-    if (!this.responseCompletionStallIsImplicit) return;
-    if (this.pendingPermissionDecisionIds.size === 0) return;
 
     const intervalMs = resolvePermissionActionabilityRecheckMs();
     this.permissionActionabilityTimer = setInterval(() => {
-      if (!this.waitingForResponse || this.pendingPermissionDecisionIds.size === 0) {
-        this.stopPermissionActionabilityRecheck();
-        return;
-      }
-      if (this.hasActionablePendingPermissionDecision()) {
-        this.sawActionablePendingPermission = true;
-        this.permissionActionabilityLossObservations = 0;
-        return;
-      }
-      if (!this.sawActionablePendingPermission) return;
-      this.permissionActionabilityLossObservations += 1;
-      if (this.permissionActionabilityLossObservations < 2) return;
-      this.stopPermissionActionabilityRecheck();
-      // The prompt was answerable and is not any more, so the provider is blocked on a
-      // decision that can never arrive. Spend the budget now rather than waiting out a
-      // provider-silence period the user would experience as unexplained thinking.
-      this.armResponseCompletionTimeout(0);
+      this.recheckPermissionActionability();
     }, intervalMs);
     this.permissionActionabilityTimer.unref?.();
   }
 
+  /**
+   * Observes actionability while permission decisions are pending. It never decides,
+   * denies or approves a prompt, and it imposes no deadline on a person, because an
+   * actionable prompt simply keeps the loop running.
+   *
+   * Losing actionability is only terminal for a request that *had* it, and only once
+   * every pending request of this turn has lost it. A request that has never been
+   * published yet may still be mid-write, so it keeps the ordinary stall budget as its
+   * publication grace — including a replacement registered after an earlier prompt
+   * disappeared. The loss must also be seen on two consecutive rechecks per request,
+   * which costs one interval and removes the narrow window where a prompt has just been
+   * answered but `endPendingPermissionDecision()` has not run yet.
+   */
+  private recheckPermissionActionability(): void {
+    if (
+      !this.waitingForResponse ||
+      !this.responseCompletionStallIsImplicit ||
+      this.pendingPermissionDecisions.size === 0
+    ) {
+      this.stopPermissionActionabilityRecheck();
+      return;
+    }
+
+    let observedRequests = 0;
+    let confirmedLostRequests = 0;
+    let silenceStillExplained = false;
+    for (const [requestId, state] of this.pendingPermissionDecisions) {
+      // A prompt left over from a finished turn says nothing about this one.
+      if (state.turnGeneration !== this.turnGeneration) continue;
+      observedRequests += 1;
+
+      if (this.isPendingPermissionRequestActionable(requestId)) {
+        state.sawActionable = true;
+        state.lossObservations = 0;
+        silenceStillExplained = true;
+        continue;
+      }
+      if (!state.sawActionable) {
+        // Never published yet: the ordinary stall budget is its grace period.
+        state.lossObservations = 0;
+        silenceStillExplained = true;
+        continue;
+      }
+      state.lossObservations += 1;
+      if (state.lossObservations >= PERMISSION_ACTIONABILITY_LOSS_CONFIRMATIONS) {
+        confirmedLostRequests += 1;
+      }
+    }
+
+    if (silenceStillExplained) return;
+    if (observedRequests === 0 || confirmedLostRequests < observedRequests) return;
+
+    this.stopPermissionActionabilityRecheck();
+    // Every prompt of this turn was answerable and is not any more, so the provider is
+    // blocked on a decision that can never arrive. Spend the budget now rather than
+    // waiting out a provider-silence period the user experiences as unexplained thinking.
+    this.armResponseCompletionTimeout(0);
+  }
+
   private stopPermissionActionabilityRecheck(): void {
-    this.permissionActionabilityLossObservations = 0;
+    for (const state of this.pendingPermissionDecisions.values()) {
+      state.lossObservations = 0;
+    }
     if (!this.permissionActionabilityTimer) return;
     clearInterval(this.permissionActionabilityTimer);
     this.permissionActionabilityTimer = null;
@@ -3405,19 +3478,29 @@ export class AcpBackend implements AgentBackend {
    * a human is never given a decision deadline. A dedicated recheck loop watches for the
    * prompt becoming unanswerable — claimed by a newer runtime or gone from agent state —
    * so that transition is noticed within seconds instead of at the next stall expiry.
+   *
+   * Each registration owns its own actionability history: a re-registered or replacement
+   * request starts unpublished, with the ordinary stall budget as its grace.
    */
   private beginPendingPermissionDecision(requestId: string): void {
-    this.pendingPermissionDecisionIds.add(requestId);
+    const existing = this.pendingPermissionDecisions.get(requestId);
+    if (!existing || existing.turnGeneration !== this.turnGeneration) {
+      this.pendingPermissionDecisions.set(requestId, {
+        turnGeneration: this.turnGeneration,
+        sawActionable: false,
+        lossObservations: 0,
+      });
+    }
+    this.syncPermissionActionabilityRecheck();
     if (!this.responseCompletionStallIsImplicit) return;
-    this.startPermissionActionabilityRecheck();
     this.bumpResponseCompletionTimeout();
   }
 
   /** Restarts the stall budget from now once the last pending decision resolves. */
   private endPendingPermissionDecision(requestId: string): void {
-    this.pendingPermissionDecisionIds.delete(requestId);
-    if (this.pendingPermissionDecisionIds.size > 0) return;
-    this.stopPermissionActionabilityRecheck();
+    this.pendingPermissionDecisions.delete(requestId);
+    this.syncPermissionActionabilityRecheck();
+    if (this.pendingPermissionDecisions.size > 0) return;
     this.bumpResponseCompletionTimeout();
   }
 
@@ -4128,9 +4211,9 @@ export class AcpBackend implements AgentBackend {
         this.bumpResponseCompletionTimeout();
       } else {
         this.clearResponseCompletionTimeout();
-        this.responseCompletionTimeoutMs = null;
-        this.responseCompletionTimeoutRejecter = null;
       }
+      // Permission rechecks follow this wait's stall ownership, never a previous one's.
+      this.syncPermissionActionabilityRecheck();
 
       this.idleResolver = (outcome?: AcpTurnOutcome) => {
         this.clearResponseCompletionTimeout();
@@ -4554,7 +4637,7 @@ export class AcpBackend implements AgentBackend {
     await this.plans.reset();
     this.planStatePublisher = null;
     this.pendingPermissions.clear();
-    this.pendingPermissionDecisionIds.clear();
+    this.pendingPermissionDecisions.clear();
     this.stopPermissionActionabilityRecheck();
     this.permissionToToolCallMap.clear();
     this.lastSelectedPermissionOptionIdByToolCallId.clear();

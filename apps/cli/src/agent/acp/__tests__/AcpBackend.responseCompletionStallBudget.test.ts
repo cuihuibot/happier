@@ -570,7 +570,9 @@ describe('AcpBackend permission-actionability recheck', () => {
     second.catch(() => {});
     (backend as any).beginPendingPermissionDecision('perm-second');
 
-    // The first prompt is superseded, but the second is still a real question.
+    // The first prompt is superseded after it was a real, answerable question; the
+    // second is still live, so the turn must keep running.
+    await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 2));
     delete session.agentState.requests['perm-first'];
     await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 6));
     expect(await waitForOutcome(observed, 10)).toBe('pending');
@@ -680,5 +682,211 @@ describe('AcpBackend permission-actionability recheck', () => {
     expect((backend as any).permissionActionabilityTimer).toBeNull();
 
     handler.reset();
+  });
+});
+
+/**
+ * Independently reproduced defects in the first recheck implementation.
+ *
+ * Both came from state that was global to the whole wait rather than owned by the thing
+ * it describes: actionability history was global instead of per request, and stall
+ * ownership (implicit budget versus an explicit caller ceiling) survived the wait that
+ * established it. The timings below are the exact reported reproductions.
+ */
+describe('AcpBackend permission-actionability recheck ownership', () => {
+  const STALL_MS = 1_000;
+  const RECHECK_MS = 20;
+
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function observe(promise: Promise<unknown>) {
+    const observed = promise.then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+    return observed;
+  }
+
+  async function settled(observed: Promise<unknown>) {
+    return Promise.race([observed, sleep(5).then(() => 'pending' as const)]);
+  }
+
+  beforeEach(() => {
+    process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS = String(STALL_MS);
+    process.env.HAPPIER_ACP_PERMISSION_RECHECK_MS = String(RECHECK_MS);
+  });
+
+  afterEach(() => {
+    delete process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS;
+    delete process.env.HAPPIER_ACP_PERMISSION_RECHECK_MS;
+  });
+
+  it('gives a replacement request the ordinary publication grace instead of inheriting the previous prompt', async () => {
+    const actionable = new Set<string>(['perm-original']);
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
+    const observed = observe(backend.waitForResponseComplete());
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-original');
+    // Several rechecks observe a genuinely answerable prompt.
+    await sleep(RECHECK_MS * 4);
+    expect(await settled(observed)).toBe('pending');
+
+    // The prompt is superseded by a replacement whose durable write has not landed yet.
+    actionable.delete('perm-original');
+    (backend as any).beginPendingPermissionDecision('perm-replacement');
+    (backend as any).endPendingPermissionDecision('perm-original');
+    const registeredAt = Date.now();
+
+    // The replacement was never actionable, so it owns publication grace of its own and
+    // must not be failed on the previous request's actionability history.
+    await sleep(RECHECK_MS * 10);
+    expect(await settled(observed)).toBe('pending');
+    expect(Date.now() - registeredAt).toBeLessThan(STALL_MS);
+
+    // It is still bounded: the ordinary stall budget remains its publication grace.
+    const result = await Promise.race([observed, sleep(STALL_MS).then(() => 'pending' as const)]);
+    expect(result).toBeInstanceOf(Error);
+    expect((backend as any).lastTurnOutcome?.kind).toBe('failed');
+  });
+
+  it('keeps a replacement alive once it publishes, without a fresh provider update', async () => {
+    const actionable = new Set<string>(['perm-first']);
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
+    const observed = observe(backend.waitForResponseComplete());
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-first');
+    await sleep(RECHECK_MS * 3);
+
+    actionable.delete('perm-first');
+    (backend as any).beginPendingPermissionDecision('perm-second');
+    (backend as any).endPendingPermissionDecision('perm-first');
+    // Publication lands a few rechecks later; the person now owns the silence again.
+    await sleep(RECHECK_MS * 3);
+    actionable.add('perm-second');
+
+    await sleep(STALL_MS * 2);
+    expect(await settled(observed)).toBe('pending');
+    expect((backend as any).waitingForResponse).toBe(true);
+  });
+
+  it('never overrides an explicit caller timeout with a recheck armed by an earlier implicit wait', async () => {
+    const actionable = new Set<string>(['perm-explicit']);
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
+    observe(backend.waitForResponseComplete());
+    await sendUpdate(backend, 'turn one');
+
+    // Turn one ends, so its implicit stall ownership ends with it.
+    (backend as any).clearResponseCompletionTimeout();
+    (backend as any).waitingForResponse = false;
+    expect((backend as any).responseCompletionStallIsImplicit).toBe(false);
+
+    // A permission registers before the next wait arms its own budget.
+    (backend as any).waitingForResponse = true;
+    (backend as any).beginPendingPermissionDecision('perm-explicit');
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+
+    // The owner chooses an explicit ceiling; the recheck loop must stay out of it.
+    const explicitWait = observe(backend.waitForResponseComplete(STALL_MS));
+    const startedAt = Date.now();
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+    actionable.delete('perm-explicit');
+
+    await sleep(RECHECK_MS * 10);
+    expect(await settled(explicitWait)).toBe('pending');
+
+    // The explicit ceiling is still the only thing that terminalizes this wait.
+    const result = await Promise.race([explicitWait, sleep(STALL_MS).then(() => 'pending' as const)]);
+    expect(result).toBeInstanceOf(Error);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(STALL_MS - RECHECK_MS);
+  });
+
+  it('does not suspend or shorten an explicit ceiling while an actionable prompt is pending', async () => {
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: () => true,
+      },
+    });
+    const explicitWait = observe(backend.waitForResponseComplete(STALL_MS / 4));
+    const startedAt = Date.now();
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-owner-ceiling');
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+
+    const result = await Promise.race([explicitWait, sleep(STALL_MS).then(() => 'pending' as const)]);
+    expect(result).toBeInstanceOf(Error);
+    expect(Date.now() - startedAt).toBeLessThan(STALL_MS);
+  });
+
+  it('keeps an explicit null opt-out unbounded when a prompt stops being actionable', async () => {
+    const actionable = new Set<string>(['perm-optout']);
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
+    const observed = observe(backend.waitForResponseComplete(null));
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-optout');
+    await sleep(RECHECK_MS * 3);
+    actionable.delete('perm-optout');
+
+    await sleep(RECHECK_MS * 10);
+    expect(await settled(observed)).toBe('pending');
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+    expect((backend as any).responseCompletionTimeout).toBeNull();
+  });
+
+  it('gives a request re-registered in a new turn generation fresh grace', async () => {
+    const actionable = new Set<string>(['perm-reused']);
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
+    observe(backend.waitForResponseComplete());
+    await sendUpdate(backend, 'turn one');
+    (backend as any).beginPendingPermissionDecision('perm-reused');
+    await sleep(RECHECK_MS * 4);
+
+    // Turn one ends with the prompt still registered, and it stops being actionable.
+    (backend as any).clearResponseCompletionTimeout();
+    (backend as any).waitingForResponse = false;
+    actionable.delete('perm-reused');
+
+    (backend as any).turnGeneration = 2;
+    (backend as any).dispatchedPromptTurnGeneration = 2;
+    (backend as any).pendingPromptResponseTurnGeneration = 2;
+    (backend as any).waitingForResponse = true;
+    const secondWait = observe(backend.waitForResponseComplete());
+    await sendUpdate(backend, 'turn two');
+    (backend as any).beginPendingPermissionDecision('perm-reused');
+
+    // Turn two's registration is a new, unpublished request: it gets grace, not the
+    // previous generation's actionability history.
+    await sleep(RECHECK_MS * 10);
+    expect(await settled(secondWait)).toBe('pending');
+    expect((backend as any).waitingForResponse).toBe(true);
   });
 });
