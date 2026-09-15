@@ -59,6 +59,36 @@ For the shared user guide, see [Provider authentication](/agents/provider-authen
 - Copilot auth in Happier is machine-local. If you log in on one machine, another machine still needs its own local login.
 - If you prefer token-based auth, Happier can detect that and show it as an environment-backed method.
 
+## Permission waits in the approved CLI candidate
+
+<Callout type="warning">
+  This behavior belongs to approved product candidate
+  `4a4574a84f387933c58992eb4b66b909e6b97a8c`. It is not installed. The current
+  installed stack remains `0.2.12-cuihui-acp-stall-v1`.
+</Callout>
+
+When an ACP permission prompt is visible and can still be answered, Happier
+keeps the turn open without imposing a deadline on the person deciding. If a
+prompt that was actionable stops being answerable, Happier confirms the loss
+twice before ending the stuck turn with a visible sanitized failure. With the
+default 5-second recheck interval, that normally takes about 10 seconds, subject
+to timer scheduling.
+
+The check applies to each current-turn permission independently. An actionable
+sibling keeps the turn alive, while a sibling that has not been published yet
+receives normal publication grace without hiding a different request whose loss
+has already been confirmed. Prompts from earlier turns cannot keep a later turn
+alive.
+
+This does not change approval or denial behavior and does not automatically
+replay the prompt, because a tool may already have produced effects. Explicit
+caller timeouts and explicit timeout opt-outs are unchanged.
+
+Operators can change the recheck interval by setting
+`HAPPIER_ACP_PERMISSION_RECHECK_MS` to a positive integer number of
+milliseconds. The default is `5000`. This is separate from the existing
+600-second implicit response-completion stall budget.
+
 ## Troubleshooting
 
 If Copilot is not detected:

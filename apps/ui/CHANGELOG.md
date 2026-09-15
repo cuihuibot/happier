@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased Cuihui CLI candidate - 2026-09-16
+
+Product candidate `4a4574a84f387933c58992eb4b66b909e6b97a8c`
+improves ACP permission waits without changing the client, UI, protocol,
+approval or denial decisions, replay, or persisted formats. It has passed
+independent product validation but is not installed; the installed stack
+remains `0.2.12-cuihui-acp-stall-v1`.
+
+- A permission prompt that remains genuinely actionable can stay open
+  indefinitely; the candidate does not impose a human decision deadline.
+- If an actionable prompt becomes unavailable, Happier confirms the loss on two
+  consecutive 5-second checks by default and normally surfaces a visible
+  sanitized terminal failure in about 10 seconds, subject to timer scheduling.
+- Actionable sibling prompts keep the turn alive. Never-published prompts retain
+  publication grace but cannot hide a different confirmed-lost prompt.
+- Stale prompts and delayed finalizers from earlier turns cannot renew or delete
+  current-turn permission state, including when a request id is reused.
+- `HAPPIER_ACP_PERMISSION_RECHECK_MS` accepts a positive integer millisecond
+  interval. Explicit caller timeouts and explicit timeout opt-outs remain
+  unchanged.
+- Happier does not replay the prompt automatically because tool effects may
+  already have occurred.
+
 ## Release 2026-09-07.1 - 2026-09-07
 
 <!-- happier-release-note-projections:v1

@@ -9,15 +9,17 @@ repository; see [Repository boundary for custom deployments](repository-boundary
 
 ## Source status
 
-The current follow-up documentation candidate is based on
-`282040453f75588a4a8864e9415248c40d671210`, the open PR #3 head. Relative to
-that source pin, this documentation migration changes no product source,
-package, test, build, or runtime file. PR #3 already contains the combined
-provider-autonomous continuation and daemon spawn-settlement changes.
+The current documentation candidate is based on the independently approved
+product commit `4a4574a84f387933c58992eb4b66b909e6b97a8c` (tree
+`930e923fcd0c041d4a9a612958d29b37cbb67864`) on
+`release/happier-0.2.12-cuihui-acp-perm-recheck-20260916`. It changes
+documentation only.
 
-This page does not claim that PR #3 is merged, released, deployed, or accepted.
-It also does not claim that moving current documentation removes environment
-details from earlier public Git history.
+That product candidate is not installed. The installed stack remains the prior
+approved `0.2.12-cuihui-acp-stall-v1`. This page therefore distinguishes the
+candidate behavior below from installed behavior and does not claim release,
+deployment, or documentation approval. Historical source and deployment
+records elsewhere on this page remain scoped to the candidates they name.
 
 ## Maintained behavior
 
@@ -194,6 +196,66 @@ Live acceptance requires a real Copilot-managed session and must cover:
 
 A successful session creation or idle send is not sufficient acceptance
 evidence.
+
+### ACP permission actionability and turn settlement
+
+The approved CLI-only candidate
+`4a4574a84f387933c58992eb4b66b909e6b97a8c` repairs a turn that could remain in
+plain thinking after an ACP permission prompt stopped being answerable. It does
+not change the client, UI, ACP protocol, approval or denial decisions, replay,
+or persisted formats. It is not installed; the installed stack remains
+`0.2.12-cuihui-acp-stall-v1`.
+
+The existing implicit response-completion stall budget remains 600 seconds and
+continues to bound provider silence, not total turn duration. While the caller
+uses that implicit budget:
+
+- A published, genuinely actionable human permission keeps the turn alive
+  indefinitely. The recheck is not a human decision deadline and never
+  approves or denies a request.
+- Permission actionability is checked every 5 seconds by default. Operators can
+  set `HAPPIER_ACP_PERMISSION_RECHECK_MS` to a positive integer number of
+  milliseconds; invalid, zero, and negative values do not replace the default.
+- A request is confirmed lost only after it was observed actionable and then
+  observed unactionable on two consecutive rechecks. With the default interval,
+  a visible sanitized terminal failure normally appears approximately 10
+  seconds after actionability is lost, subject to timer scheduling.
+- A never-yet-published request retains the ordinary publication grace. That
+  unpublished sibling cannot hide a different request that has already been
+  confirmed lost.
+- Any genuinely actionable sibling keeps the turn alive. Once no request is
+  actionable and at least one is confirmed lost, the turn terminalizes
+  promptly.
+- Permission state is scoped to the current turn generation. A stale prompt
+  from an earlier generation cannot renew a later turn's stall budget.
+- Each registration owns its own finalization. A delayed finalizer for an older
+  use of the same request id cannot delete or disturb the newer registration.
+- Explicit caller timeouts and explicit `null` or zero opt-outs retain their
+  existing behavior; the actionability recheck does not replace or extend them.
+
+The terminal failure is intentionally visible and sanitized. Happier does not
+automatically replay the prompt because tool effects may already have occurred.
+
+Primary implementation:
+
+- `apps/cli/src/agent/acp/AcpBackend.ts`
+
+Focused regression:
+
+```bash
+cd apps/cli
+yarn vitest run \
+  src/agent/acp/__tests__/AcpBackend.permissionDecisionOwnership.test.ts \
+  src/agent/acp/__tests__/AcpBackend.responseCompletionStallBudget.test.ts
+yarn vitest run src/agent
+yarn typecheck
+```
+
+Independent product validation for the exact candidate passed the focused lane
+(37/37), `src/agent` (2149/2149), typecheck, and cycle checks. The full unit lane
+had one unrelated tmux prerequisite failure. These results establish the
+product candidate's validation basis; they do not approve this documentation
+candidate.
 
 ### Daemon spawn identity settlement
 
