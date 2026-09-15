@@ -196,4 +196,3 @@ describe('copilot/sdk/runtime', () => {
     expect(degenerate.nativeToolCallId).toBeNull();
   });
 });
-
