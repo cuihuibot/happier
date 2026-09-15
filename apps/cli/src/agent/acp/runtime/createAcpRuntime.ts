@@ -401,6 +401,7 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
    * uncancellable autonomous work, so its session must not be resumed.
    */
   isProviderSessionResumePoisoned?: () => boolean;
+  /**
    * Whether a completed `dispose()` actually proved the owned runtime process
    * exited.
    *
