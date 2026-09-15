@@ -405,3 +405,280 @@ describe('AcpBackend stall budget with the real permission predicate', () => {
     handler.reset();
   });
 });
+
+/**
+ * Detecting that a prompt stopped being answerable must not cost a whole provider-stall
+ * period. The provider budget bounds provider *silence* and is deliberately long; the
+ * permission-actionability recheck bounds how long the user keeps seeing plain
+ * "thinking" after the prompt became undeliverable. These are separate timings, so this
+ * suite gives the stall budget a large value and asserts detection against the short
+ * recheck interval only.
+ */
+describe('AcpBackend permission-actionability recheck', () => {
+  const LONG_STALL_MS = 10_000;
+  const RECHECK_MS = 50;
+
+  beforeEach(() => {
+    process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS = String(LONG_STALL_MS);
+    process.env.HAPPIER_ACP_PERMISSION_RECHECK_MS = String(RECHECK_MS);
+  });
+
+  afterEach(() => {
+    delete process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS;
+    delete process.env.HAPPIER_ACP_PERMISSION_RECHECK_MS;
+  });
+
+  async function waitForOutcome(observed: Promise<unknown>, budgetMs: number) {
+    return Promise.race([
+      observed,
+      new Promise((resolve) => setTimeout(() => resolve('pending' as const), budgetMs)),
+    ]);
+  }
+
+  it('terminalizes within the recheck interval, not the stall budget, when a claim lands', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+
+    await sendUpdate(backend, 'about to ask');
+    const pending = handler.handleToolCall('perm-latency', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-latency');
+    expect(handler.isPendingRequestActionable('perm-latency')).toBe(true);
+
+    // Genuine actionable wait well past a whole stall budget: no deadline for a human.
+    await new Promise((resolve) => setTimeout(resolve, LONG_STALL_MS / 4));
+    expect(await waitForOutcome(observed, 10)).toBe('pending');
+
+    session.agentState.requests['perm-latency'] = {
+      ...session.agentState.requests['perm-latency'],
+      [PERMISSION_RESPONSE_CLAIM_V1]: { runtimeId: 'newer-runtime' },
+    };
+    const lostAt = Date.now();
+
+    const result = await waitForOutcome(observed, LONG_STALL_MS);
+    const detectionMs = Date.now() - lostAt;
+
+    expect(result).toBeInstanceOf(Error);
+    expect((backend as any).lastTurnOutcome?.kind).toBe('failed');
+    // The exact acceptance bound: detection is governed by the recheck interval.
+    expect(detectionMs).toBeLessThan(RECHECK_MS * 10);
+    expect(detectionMs).toBeLessThan(LONG_STALL_MS / 4);
+
+    handler.reset();
+  });
+
+  it('keeps a genuinely actionable prompt alive far beyond several stall budgets', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS = '60';
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+
+    await sendUpdate(backend, 'about to ask');
+    const pending = handler.handleToolCall('perm-patient', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-patient');
+
+    // Many stall budgets and many recheck ticks of a real, answerable prompt.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(await waitForOutcome(observed, 10)).toBe('pending');
+    expect((backend as any).waitingForResponse).toBe(true);
+    expect((backend as any).lastTurnOutcome).toBeNull();
+
+    handler.reset();
+  });
+
+
+  it('terminalizes promptly when the durable request disappears from agent state', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+
+    await sendUpdate(backend, 'about to ask');
+    const pending = handler.handleToolCall('perm-gone', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-gone');
+    await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 2));
+
+    delete session.agentState.requests['perm-gone'];
+    const lostAt = Date.now();
+
+    const result = await waitForOutcome(observed, LONG_STALL_MS);
+    expect(result).toBeInstanceOf(Error);
+    expect(Date.now() - lostAt).toBeLessThan(RECHECK_MS * 10);
+
+    handler.reset();
+  });
+
+  it('does not fail a prompt that is answered while the recheck loop is running', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+
+    await sendUpdate(backend, 'about to ask');
+    const pending = handler.handleToolCall('perm-answered', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-answered');
+    await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 2));
+
+    // The person answers: the waiter resolves and the backend ends the decision. The
+    // request stops being actionable, but the turn must keep running normally.
+    handler.reset();
+    (backend as any).endPendingPermissionDecision('perm-answered');
+
+    await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 6));
+    expect(await waitForOutcome(observed, 10)).toBe('pending');
+    expect((backend as any).waitingForResponse).toBe(true);
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+  });
+
+  it('keeps running while a replacement prompt remains actionable and fails once none are', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+
+    await sendUpdate(backend, 'about to ask');
+    const first = handler.handleToolCall('perm-first', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    first.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-first');
+    const second = handler.handleToolCall('perm-second', 'Bash', { command: ['bash', '-lc', 'pwd'] });
+    second.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-second');
+
+    // The first prompt is superseded, but the second is still a real question.
+    delete session.agentState.requests['perm-first'];
+    await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 6));
+    expect(await waitForOutcome(observed, 10)).toBe('pending');
+
+    delete session.agentState.requests['perm-second'];
+    const lostAt = Date.now();
+    const result = await waitForOutcome(observed, LONG_STALL_MS);
+    expect(result).toBeInstanceOf(Error);
+    expect(Date.now() - lostAt).toBeLessThan(RECHECK_MS * 10);
+
+    handler.reset();
+  });
+
+  it('stops the recheck loop when the turn terminalizes for another reason first', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+
+    await sendUpdate(backend, 'about to ask');
+    const pending = handler.handleToolCall('perm-cancelled', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-cancelled');
+    expect((backend as any).permissionActionabilityTimer).not.toBeNull();
+
+    // A connection close wins the terminal race while the prompt is still pending.
+    (backend as any).handleProviderStreamTerminated('ACP connection closed');
+    const firstOutcome = (backend as any).responseCompletionError;
+    expect(await observed).toBeInstanceOf(Error);
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+
+    // The dead loop cannot resurrect a timer or replace the first terminal outcome.
+    delete session.agentState.requests['perm-cancelled'];
+    await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 6));
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+    expect((backend as any).responseCompletionError).toBe(firstOutcome);
+
+    handler.reset();
+  });
+
+
+  it('never lets a stale prompt from a finished turn fail the next turn', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const firstWait = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    firstWait.catch(() => {});
+
+    await sendUpdate(backend, 'turn one');
+    const pending = handler.handleToolCall('perm-stale', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-stale');
+    await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 2));
+
+    // Turn one ends; the stale prompt is deliberately left registered and then loses
+    // actionability after a new turn has already taken over the waiter.
+    (backend as any).clearResponseCompletionTimeout();
+    (backend as any).waitingForResponse = false;
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+
+    (backend as any).turnGeneration = 2;
+    (backend as any).dispatchedPromptTurnGeneration = 2;
+    (backend as any).pendingPromptResponseTurnGeneration = 2;
+    (backend as any).waitingForResponse = true;
+    const secondWait = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    secondWait.catch(() => {});
+
+    delete session.agentState.requests['perm-stale'];
+    await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 6));
+
+    expect(await waitForOutcome(secondWait, 10)).toBe('pending');
+    expect((backend as any).waitingForResponse).toBe(true);
+
+    handler.reset();
+  });
+
+  it('stops the recheck timer once the permission resolves, leaving no live handle', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+
+    await sendUpdate(backend, 'about to ask');
+    const pending = handler.handleToolCall('perm-cleanup', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-cleanup');
+    expect((backend as any).permissionActionabilityTimer).not.toBeNull();
+
+    (backend as any).endPendingPermissionDecision('perm-cleanup');
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+
+    // Dispose must also be safe and idempotent with no pending decisions left.
+    (backend as any).dispose();
+    expect((backend as any).permissionActionabilityTimer).toBeNull();
+
+    handler.reset();
+  });
+});
