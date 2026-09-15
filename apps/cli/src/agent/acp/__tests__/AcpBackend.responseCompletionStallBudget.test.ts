@@ -130,14 +130,14 @@ describe('AcpBackend response-completion stall budget', () => {
       .then(() => 'resolved' as const, (error: Error) => error);
 
     await sendUpdate(backend, 'about to ask');
-    (backend as any).beginPendingPermissionDecision('perm-1');
+    const registration = (backend as any).beginPendingPermissionDecision('perm-1');
 
     // A human takes far longer than the stall budget to answer.
     await vi.advanceTimersByTimeAsync(STALL_MS * 4);
     expect(await Promise.race([observed, Promise.resolve('pending' as const)])).toBe('pending');
 
     // Resolving the decision re-arms the watchdog rather than leaving it suspended.
-    (backend as any).endPendingPermissionDecision('perm-1');
+    (backend as any).endPendingPermissionDecision('perm-1', registration);
     await flush();
     expect((backend as any).responseCompletionTimeout).not.toBeNull();
 
@@ -288,7 +288,7 @@ describe('AcpBackend response-completion stall budget', () => {
       .then(() => 'resolved' as const, (error: Error) => error);
 
     await sendUpdate(backend, 'about to ask');
-    (backend as any).beginPendingPermissionDecision('perm-late-answer');
+    const registration = (backend as any).beginPendingPermissionDecision('perm-late-answer');
     await vi.advanceTimersByTimeAsync(STALL_MS + 1);
     await observed;
 
@@ -296,7 +296,7 @@ describe('AcpBackend response-completion stall budget', () => {
     expect(firstOutcome?.kind).toBe('failed');
 
     // A cancellation or late decision for the dead turn must not resurrect a timer.
-    (backend as any).endPendingPermissionDecision('perm-late-answer');
+    (backend as any).endPendingPermissionDecision('perm-late-answer', registration);
     await flush();
     expect((backend as any).responseCompletionTimeout).toBeNull();
     expect((backend as any).lastTurnOutcome).toBe(firstOutcome);
@@ -538,13 +538,13 @@ describe('AcpBackend permission-actionability recheck', () => {
     await sendUpdate(backend, 'about to ask');
     const pending = handler.handleToolCall('perm-answered', 'Bash', { command: ['bash', '-lc', 'ls'] });
     pending.catch(() => {});
-    (backend as any).beginPendingPermissionDecision('perm-answered');
+    const registration = (backend as any).beginPendingPermissionDecision('perm-answered');
     await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 2));
 
     // The person answers: the waiter resolves and the backend ends the decision. The
     // request stops being actionable, but the turn must keep running normally.
     handler.reset();
-    (backend as any).endPendingPermissionDecision('perm-answered');
+    (backend as any).endPendingPermissionDecision('perm-answered', registration);
 
     await new Promise((resolve) => setTimeout(resolve, RECHECK_MS * 6));
     expect(await waitForOutcome(observed, 10)).toBe('pending');
@@ -671,10 +671,10 @@ describe('AcpBackend permission-actionability recheck', () => {
     await sendUpdate(backend, 'about to ask');
     const pending = handler.handleToolCall('perm-cleanup', 'Bash', { command: ['bash', '-lc', 'ls'] });
     pending.catch(() => {});
-    (backend as any).beginPendingPermissionDecision('perm-cleanup');
+    const registration = (backend as any).beginPendingPermissionDecision('perm-cleanup');
     expect((backend as any).permissionActionabilityTimer).not.toBeNull();
 
-    (backend as any).endPendingPermissionDecision('perm-cleanup');
+    (backend as any).endPendingPermissionDecision('perm-cleanup', registration);
     expect((backend as any).permissionActionabilityTimer).toBeNull();
 
     // Dispose must also be safe and idempotent with no pending decisions left.
@@ -732,7 +732,7 @@ describe('AcpBackend permission-actionability recheck ownership', () => {
     const observed = observe(backend.waitForResponseComplete());
 
     await sendUpdate(backend, 'about to ask');
-    (backend as any).beginPendingPermissionDecision('perm-original');
+    const original = (backend as any).beginPendingPermissionDecision('perm-original');
     // Several rechecks observe a genuinely answerable prompt.
     await sleep(RECHECK_MS * 4);
     expect(await settled(observed)).toBe('pending');
@@ -740,7 +740,7 @@ describe('AcpBackend permission-actionability recheck ownership', () => {
     // The prompt is superseded by a replacement whose durable write has not landed yet.
     actionable.delete('perm-original');
     (backend as any).beginPendingPermissionDecision('perm-replacement');
-    (backend as any).endPendingPermissionDecision('perm-original');
+    (backend as any).endPendingPermissionDecision('perm-original', original);
     const registeredAt = Date.now();
 
     // The replacement was never actionable, so it owns publication grace of its own and
@@ -766,12 +766,12 @@ describe('AcpBackend permission-actionability recheck ownership', () => {
     const observed = observe(backend.waitForResponseComplete());
 
     await sendUpdate(backend, 'about to ask');
-    (backend as any).beginPendingPermissionDecision('perm-first');
+    const first = (backend as any).beginPendingPermissionDecision('perm-first');
     await sleep(RECHECK_MS * 3);
 
     actionable.delete('perm-first');
     (backend as any).beginPendingPermissionDecision('perm-second');
-    (backend as any).endPendingPermissionDecision('perm-first');
+    (backend as any).endPendingPermissionDecision('perm-first', first);
     // Publication lands a few rechecks later; the person now owns the silence again.
     await sleep(RECHECK_MS * 3);
     actionable.add('perm-second');
@@ -976,10 +976,11 @@ describe('AcpBackend permission-actionability mixed pending sets', () => {
     const observed = observe(backend.waitForResponseComplete());
 
     await sendUpdate(backend, 'about to ask');
+    const registrations = new Map<string, unknown>();
     for (const id of ['perm-lost', 'perm-live']) {
       const pending = handler.handleToolCall(id, 'Bash', { command: ['bash', '-lc', 'ls'] });
       pending.catch(() => {});
-      (backend as any).beginPendingPermissionDecision(id);
+      registrations.set(id, (backend as any).beginPendingPermissionDecision(id));
     }
     await sleep(RECHECK_MS * 4);
 
@@ -991,7 +992,7 @@ describe('AcpBackend permission-actionability mixed pending sets', () => {
     expect((backend as any).waitingForResponse).toBe(true);
 
     // Answering the live prompt leaves only the request already proven lost.
-    (backend as any).endPendingPermissionDecision('perm-live');
+    (backend as any).endPendingPermissionDecision('perm-live', registrations.get('perm-live'));
     const unexplainedAt = Date.now();
     const result = await outcomeWithin(observed, STALL_MS * 2);
     expect(result).toBeInstanceOf(Error);

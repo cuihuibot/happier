@@ -315,6 +315,16 @@ type PendingPermissionDecisionState = {
   lossObservations: number;
 };
 
+/**
+ * Exact identity of one pending permission registration.
+ *
+ * The request id alone cannot own removal: a provider may reuse it, so a finalizer that
+ * unwinds late would otherwise delete a *newer* registration it never created. The state
+ * object registered by `beginPendingPermissionDecision()` is that identity, and only the
+ * registration still held by the map may remove itself.
+ */
+type PendingPermissionRegistration = PendingPermissionDecisionState;
+
 /** Consecutive rechecks required before a request counts as having lost actionability. */
 const PERMISSION_ACTIONABILITY_LOSS_CONFIRMATIONS = 2;
 
@@ -1678,7 +1688,7 @@ export class AcpBackend implements AgentBackend {
           try {
             // The turn's stall budget is suspended for exactly as long as a published,
             // actionable human decision is outstanding, then re-armed.
-            this.beginPendingPermissionDecision(permissionId);
+            const permissionRegistration = this.beginPendingPermissionDecision(permissionId);
             let result: Awaited<ReturnType<typeof this.options.permissionHandler.handleToolCall>>;
             try {
               result = await this.options.permissionHandler.handleToolCall(
@@ -1687,7 +1697,7 @@ export class AcpBackend implements AgentBackend {
                 input
               );
             } finally {
-              this.endPendingPermissionDecision(permissionId);
+              this.endPendingPermissionDecision(permissionId, permissionRegistration);
             }
 
             const isApproved = result.decision === 'approved'
@@ -3504,23 +3514,41 @@ export class AcpBackend implements AgentBackend {
    *
    * Each registration owns its own actionability history: a re-registered or replacement
    * request starts unpublished, with the ordinary stall budget as its grace.
+   *
+   * Returns the registration that owns this pending decision. The caller must hand exactly
+   * that value back to `endPendingPermissionDecision()` so a late finalizer can never
+   * remove a registration it does not own.
    */
-  private beginPendingPermissionDecision(requestId: string): void {
+  private beginPendingPermissionDecision(requestId: string): PendingPermissionRegistration {
     const existing = this.pendingPermissionDecisions.get(requestId);
-    if (!existing || existing.turnGeneration !== this.turnGeneration) {
-      this.pendingPermissionDecisions.set(requestId, {
+    let registration = existing;
+    if (!registration || registration.turnGeneration !== this.turnGeneration) {
+      registration = {
         turnGeneration: this.turnGeneration,
         sawActionable: false,
         lossObservations: 0,
-      });
+      };
+      this.pendingPermissionDecisions.set(requestId, registration);
     }
     this.syncPermissionActionabilityRecheck();
-    if (!this.responseCompletionStallIsImplicit) return;
-    this.bumpResponseCompletionTimeout();
+    if (this.responseCompletionStallIsImplicit) {
+      this.bumpResponseCompletionTimeout();
+    }
+    return registration;
   }
 
-  /** Restarts the stall budget from now once this turn's last pending decision resolves. */
-  private endPendingPermissionDecision(requestId: string): void {
+  /**
+   * Restarts the stall budget from now once this turn's last pending decision resolves.
+   *
+   * A finalizer whose registration is no longer the one held for `requestId` — superseded
+   * by a newer turn or already removed — is a strict no-op: it deletes nothing, touches no
+   * timer and leaves the newer registration's state and grace exactly as they were.
+   */
+  private endPendingPermissionDecision(
+    requestId: string,
+    registration: PendingPermissionRegistration,
+  ): void {
+    if (this.pendingPermissionDecisions.get(requestId) !== registration) return;
     this.pendingPermissionDecisions.delete(requestId);
     this.syncPermissionActionabilityRecheck();
     if (this.hasCurrentTurnPendingPermissionDecision()) return;
