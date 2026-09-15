@@ -3281,17 +3281,6 @@ export class AcpBackend implements AgentBackend {
 
   private bumpResponseCompletionTimeout(): void {
     if (!this.waitingForResponse) return;
-    // A human deciding a *published, actionable* permission prompt is not provider
-    // silence. Stay suspended until that decision resolves, otherwise an update that
-    // arrives while the prompt is open would re-arm a budget that then expires on the
-    // person, not the provider. A prompt nobody can see gets no such protection.
-    if (this.responseCompletionStallIsImplicit && this.hasActionablePendingPermissionDecision()) {
-      if (this.responseCompletionTimeout) {
-        clearTimeout(this.responseCompletionTimeout);
-        this.responseCompletionTimeout = null;
-      }
-      return;
-    }
 
     const timeoutMs = this.responseCompletionTimeoutMs;
     const rejecter = this.responseCompletionTimeoutRejecter;
@@ -3307,9 +3296,15 @@ export class AcpBackend implements AgentBackend {
       this.responseCompletionTimeout = null;
       // Avoid stale timeouts firing after the waiter has already been cleared.
       if (this.responseCompletionTimeoutRejecter !== rejecter) return;
-      // Publication can land after the provider blocked. Re-check at expiry so a prompt
-      // that became actionable meanwhile suspends the budget instead of failing the turn.
+      // A human deciding a *published, actionable* prompt is not provider silence, so
+      // renew the budget instead of failing. Renewing rather than cancelling keeps the
+      // suspension continuously conditional: if the request is later claimed by a newer
+      // runtime or disappears from agent state, the very next expiry terminalizes the
+      // turn without needing another provider update or a permission response.
+      // Publication can also land after the provider blocked, and this same re-check is
+      // what lets that prompt suspend instead of failing the turn.
       if (this.responseCompletionStallIsImplicit && this.hasActionablePendingPermissionDecision()) {
+        this.bumpResponseCompletionTimeout();
         return;
       }
       rejecter();
@@ -3318,10 +3313,12 @@ export class AcpBackend implements AgentBackend {
   }
 
   /**
-   * Suspends the response-completion stall budget while a human decides a published,
-   * actionable permission prompt. The provider is legitimately silent for as long as the
-   * person takes. A prompt that is not (yet) actionable keeps the budget armed, so an
-   * invisible prompt terminalizes deterministically instead of hanging the turn.
+   * Registers a pending permission decision. The stall budget stays armed and is
+   * *renewed* at each expiry for as long as the prompt is published and actionable, so
+   * a human is never given a decision deadline. Suspension therefore lapses by itself
+   * the moment the request stops being answerable — claimed by a newer runtime or gone
+   * from agent state — instead of depending on another provider update or a response
+   * that a blocked provider can no longer send.
    */
   private beginPendingPermissionDecision(requestId: string): void {
     this.pendingPermissionDecisionIds.add(requestId);
@@ -3329,7 +3326,7 @@ export class AcpBackend implements AgentBackend {
     this.bumpResponseCompletionTimeout();
   }
 
-  /** Re-arms the stall budget once the last pending permission decision resolves. */
+  /** Restarts the stall budget from now once the last pending decision resolves. */
   private endPendingPermissionDecision(requestId: string): void {
     this.pendingPermissionDecisionIds.delete(requestId);
     if (this.pendingPermissionDecisionIds.size === 0) this.bumpResponseCompletionTimeout();

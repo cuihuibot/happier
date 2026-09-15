@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AcpBackend } from '../AcpBackend';
+import { BasePermissionHandler } from '@/agent/permissions/BasePermissionHandler';
+import { PERMISSION_RESPONSE_CLAIM_V1 } from '@/agent/permissions/agentStateRequestStore';
 import type { AgentMessage } from '@/agent/core/AgentMessage';
 
 /**
@@ -216,6 +218,91 @@ describe('AcpBackend response-completion stall budget', () => {
     expect((backend as any).responseCompletionError).toBeNull();
   });
 
+  it('resumes the budget when a pending request stops being actionable, with no further provider update', async () => {
+    const actionable = new Set<string>(['perm-claimed']);
+    const { backend } = createBackend({
+      permissionHandler: {
+        // The provider stays blocked on this call for the whole test: nothing
+        // resolves the decision, and no session/update ever arrives again.
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-claimed');
+
+    await vi.advanceTimersByTimeAsync(STALL_MS * 2);
+    expect(await Promise.race([observed, Promise.resolve('pending' as const)])).toBe('pending');
+
+    // A newer runtime claims the durable response, or the request disappears from
+    // agent state. No client can answer it any more, so the person no longer owns
+    // the silence and the suspension must lapse on its own.
+    actionable.delete('perm-claimed');
+
+    await vi.advanceTimersByTimeAsync(STALL_MS * 2 + 1);
+    const result = await observed;
+    expect(result).toBeInstanceOf(Error);
+    expect((backend as any).lastTurnOutcome?.kind).toBe('failed');
+    expect((backend as any).waitingForResponse).toBe(false);
+  });
+
+  it('stays suspended while any one of several pending requests is still actionable', async () => {
+    const actionable = new Set<string>(['perm-b']);
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-a');
+    (backend as any).beginPendingPermissionDecision('perm-b');
+
+    // `perm-a` was never publishable, but `perm-b` is a real human prompt.
+    await vi.advanceTimersByTimeAsync(STALL_MS * 3);
+    expect(await Promise.race([observed, Promise.resolve('pending' as const)])).toBe('pending');
+
+    // Once the last actionable prompt is gone, the budget resumes for both.
+    actionable.delete('perm-b');
+    await vi.advanceTimersByTimeAsync(STALL_MS * 2 + 1);
+    expect(await observed).toBeInstanceOf(Error);
+  });
+
+  it('does not re-arm or re-terminalize when a permission resolves after the turn already failed', async () => {
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: () => new Promise<never>(() => {}),
+        isPendingRequestActionable: () => false,
+      },
+    });
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-late-answer');
+    await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+    await observed;
+
+    const firstOutcome = (backend as any).lastTurnOutcome;
+    expect(firstOutcome?.kind).toBe('failed');
+
+    // A cancellation or late decision for the dead turn must not resurrect a timer.
+    (backend as any).endPendingPermissionDecision('perm-late-answer');
+    await flush();
+    expect((backend as any).responseCompletionTimeout).toBeNull();
+    expect((backend as any).lastTurnOutcome).toBe(firstOutcome);
+    expect((backend as any).waitingForResponse).toBe(false);
+  });
+
   it('reaches a terminal failed outcome and clears active turn state on expiry', async () => {
     const { backend } = createBackend();
     const observed = backend
@@ -250,5 +337,71 @@ describe('AcpBackend response-completion stall budget', () => {
     // A later connection.closed for the same turn must not replace the first outcome.
     (backend as any).handleProviderStreamTerminated('ACP connection closed');
     expect((backend as any).responseCompletionError).toBe(firstError);
+  });
+});
+
+/**
+ * The same contract exercised end to end against the *real* actionability predicate
+ * and real timers, mirroring the independently reported reproduction: a prompt that is
+ * actionable when the provider blocks, then claimed by a newer runtime while the
+ * permission promise is still pending.
+ */
+class ClaimableSession {
+  rpcHandlerManager = { handlers: new Map(), registerHandler(name: string, handler: unknown) { this.handlers.set(name, handler); } };
+  agentState: any = { requests: {}, completedRequests: {} };
+  getAgentStateSnapshot() { return this.agentState; }
+  updateAgentState(updater: any) { this.agentState = updater(this.agentState); return this.agentState; }
+}
+
+class RealPermissionHandler extends BasePermissionHandler {
+  protected getLogPrefix(): string { return '[StallBudget]'; }
+  handleToolCall(toolCallId: string, toolName: string, input: unknown) {
+    return this.requestPermissionDecision(toolCallId, toolName, input);
+  }
+}
+
+describe('AcpBackend stall budget with the real permission predicate', () => {
+  const REAL_STALL_MS = 40;
+
+  beforeEach(() => {
+    process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS = String(REAL_STALL_MS);
+  });
+
+  afterEach(() => {
+    delete process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS;
+  });
+
+  it('resumes and terminalizes when a newer runtime claims the request mid-wait', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+
+    await sendUpdate(backend, 'about to ask');
+    const pending = handler.handleToolCall('perm-real', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-real');
+
+    expect(handler.isPendingRequestActionable('perm-real')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, REAL_STALL_MS * 3));
+    expect(await Promise.race([observed, Promise.resolve('pending' as const)])).toBe('pending');
+
+    session.agentState.requests['perm-real'] = {
+      ...session.agentState.requests['perm-real'],
+      [PERMISSION_RESPONSE_CLAIM_V1]: { runtimeId: 'newer-runtime' },
+    };
+    expect(handler.isPendingRequestActionable('perm-real')).toBe(false);
+
+    // No further provider update and no permission response: the budget must resume.
+    await new Promise((resolve) => setTimeout(resolve, REAL_STALL_MS * 3));
+    const result = await observed;
+    expect(result).toBeInstanceOf(Error);
+    expect((backend as any).lastTurnOutcome?.kind).toBe('failed');
+    expect((backend as any).waitingForResponse).toBe(false);
+
+    handler.reset();
   });
 });
