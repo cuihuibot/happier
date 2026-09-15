@@ -890,3 +890,195 @@ describe('AcpBackend permission-actionability recheck ownership', () => {
     expect((backend as any).waitingForResponse).toBe(true);
   });
 });
+
+/**
+ * Mixed pending sets: actionable, confirmed-lost and never-published requests at once.
+ *
+ * Independently reproduced: a never-published sibling explained the silence for the whole
+ * turn, so a *different* request already proven lost could not terminalize it. Publication
+ * grace belongs to the unpublished request alone; it never speaks for another request.
+ *
+ * The deterministic rule these cases pin down, evaluated per recheck over this turn's
+ * pending requests: a request observed actionable and then unactionable on two
+ * consecutive rechecks is confirmed lost, and the turn terminalizes as soon as any
+ * request is confirmed lost and no request is currently actionable. A currently
+ * actionable request always keeps the turn alive, because a person really can still
+ * answer it; a never-published request only keeps its own ordinary stall-budget grace.
+ */
+describe('AcpBackend permission-actionability mixed pending sets', () => {
+  const STALL_MS = 1_000;
+  const RECHECK_MS = 20;
+
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function observe(promise: Promise<unknown>) {
+    const observed = promise.then(() => 'resolved' as const, (error: Error) => error);
+    observed.catch(() => {});
+    return observed;
+  }
+
+  async function settled(observed: Promise<unknown>) {
+    return Promise.race([observed, sleep(5).then(() => 'pending' as const)]);
+  }
+
+  /** Waits for a terminal outcome without letting the stall budget mask the timing. */
+  async function outcomeWithin(observed: Promise<unknown>, budgetMs: number) {
+    return Promise.race([observed, sleep(budgetMs).then(() => 'pending' as const)]);
+  }
+
+  beforeEach(() => {
+    process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS = String(STALL_MS);
+    process.env.HAPPIER_ACP_PERMISSION_RECHECK_MS = String(RECHECK_MS);
+  });
+
+  afterEach(() => {
+    delete process.env.HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS;
+    delete process.env.HAPPIER_ACP_PERMISSION_RECHECK_MS;
+  });
+
+  it('terminalizes a confirmed-lost request while a never-published sibling still holds its own grace', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+    const observed = observe(backend.waitForResponseComplete());
+
+    await sendUpdate(backend, 'about to ask');
+    const live = handler.handleToolCall('perm-lost', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    live.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-lost');
+    // Registered but never published to any client, and never actionable.
+    (backend as any).beginPendingPermissionDecision('perm-unpublished');
+    expect(handler.isPendingRequestActionable('perm-lost')).toBe(true);
+    expect(handler.isPendingRequestActionable('perm-unpublished')).toBe(false);
+
+    await sleep(RECHECK_MS * 4);
+    expect(await settled(observed)).toBe('pending');
+
+    delete session.agentState.requests['perm-lost'];
+    const lostAt = Date.now();
+
+    const result = await outcomeWithin(observed, STALL_MS * 2);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/timeout waiting for response/i);
+    expect((backend as any).lastTurnOutcome?.kind).toBe('failed');
+    // Two rechecks, not a whole stall period spent as the sibling's grace.
+    expect(Date.now() - lostAt).toBeLessThan(RECHECK_MS * 10);
+
+    handler.reset();
+  });
+
+  it('keeps the turn alive when one request is lost while another is genuinely actionable', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+    const observed = observe(backend.waitForResponseComplete());
+
+    await sendUpdate(backend, 'about to ask');
+    for (const id of ['perm-lost', 'perm-live']) {
+      const pending = handler.handleToolCall(id, 'Bash', { command: ['bash', '-lc', 'ls'] });
+      pending.catch(() => {});
+      (backend as any).beginPendingPermissionDecision(id);
+    }
+    await sleep(RECHECK_MS * 4);
+
+    // One prompt is gone for good, but the person is still looking at the other one, so
+    // the provider is legitimately waiting and failing the turn would be a false failure.
+    delete session.agentState.requests['perm-lost'];
+    await sleep(STALL_MS * 2);
+    expect(await settled(observed)).toBe('pending');
+    expect((backend as any).waitingForResponse).toBe(true);
+
+    // Answering the live prompt leaves only the request already proven lost.
+    (backend as any).endPendingPermissionDecision('perm-live');
+    const unexplainedAt = Date.now();
+    const result = await outcomeWithin(observed, STALL_MS * 2);
+    expect(result).toBeInstanceOf(Error);
+    expect(Date.now() - unexplainedAt).toBeLessThan(RECHECK_MS * 10);
+
+    handler.reset();
+  });
+
+  it('fails once the last actionable request is lost, even with a never-published sibling pending', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+    const observed = observe(backend.waitForResponseComplete());
+
+    await sendUpdate(backend, 'about to ask');
+    for (const id of ['perm-lost', 'perm-live']) {
+      const pending = handler.handleToolCall(id, 'Bash', { command: ['bash', '-lc', 'ls'] });
+      pending.catch(() => {});
+      (backend as any).beginPendingPermissionDecision(id);
+    }
+    (backend as any).beginPendingPermissionDecision('perm-unpublished');
+    await sleep(RECHECK_MS * 4);
+
+    delete session.agentState.requests['perm-lost'];
+    await sleep(RECHECK_MS * 6);
+    expect(await settled(observed)).toBe('pending');
+
+    delete session.agentState.requests['perm-live'];
+    const unexplainedAt = Date.now();
+    const result = await outcomeWithin(observed, STALL_MS * 2);
+    expect(result).toBeInstanceOf(Error);
+    expect(Date.now() - unexplainedAt).toBeLessThan(RECHECK_MS * 10);
+
+    handler.reset();
+  });
+
+  it('gives a never-yet-actionable request alone the ordinary publication grace', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+    const observed = observe(backend.waitForResponseComplete());
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-unpublished');
+    const registeredAt = Date.now();
+
+    // No recheck may shorten publication grace for a request that was never answerable.
+    await sleep(RECHECK_MS * 10);
+    expect(await settled(observed)).toBe('pending');
+    expect(Date.now() - registeredAt).toBeLessThan(STALL_MS);
+
+    // It stays bounded by the ordinary stall budget rather than waiting forever.
+    expect(await outcomeWithin(observed, STALL_MS * 2)).toBeInstanceOf(Error);
+
+    handler.reset();
+  });
+
+  it('does not let an actionable prompt from a finished turn renew the next turn\'s stall budget', async () => {
+    const session = new ClaimableSession();
+    const handler = new RealPermissionHandler(session as any);
+    const { backend } = createBackend({ permissionHandler: handler });
+    observe(backend.waitForResponseComplete());
+
+    await sendUpdate(backend, 'turn one');
+    const pending = handler.handleToolCall('perm-stale', 'Bash', { command: ['bash', '-lc', 'ls'] });
+    pending.catch(() => {});
+    (backend as any).beginPendingPermissionDecision('perm-stale');
+    expect(handler.isPendingRequestActionable('perm-stale')).toBe(true);
+
+    // Turn one ends with the prompt still registered and still answerable.
+    (backend as any).clearResponseCompletionTimeout();
+    (backend as any).waitingForResponse = false;
+
+    (backend as any).turnGeneration = 2;
+    (backend as any).dispatchedPromptTurnGeneration = 2;
+    (backend as any).pendingPromptResponseTurnGeneration = 2;
+    (backend as any).waitingForResponse = true;
+    const secondWait = observe(backend.waitForResponseComplete());
+    await sendUpdate(backend, 'turn two');
+    const startedAt = Date.now();
+
+    // Turn two has no pending decision of its own, so the stale prompt must not renew
+    // its budget at expiry: the same generation scope the recheck loop already uses.
+    const result = await outcomeWithin(secondWait, STALL_MS * 3);
+    expect(result).toBeInstanceOf(Error);
+    expect(Date.now() - startedAt).toBeLessThan(STALL_MS * 2);
+
+    handler.reset();
+  });
+});

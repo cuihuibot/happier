@@ -3322,12 +3322,34 @@ export class AcpBackend implements AgentBackend {
   }
 
   /**
-   * Whether some pending permission decision is provably published and actionable, and
-   * therefore explains the provider's silence. Unverifiable or orphaned prompts are
-   * deliberately excluded so they cannot suspend the watchdog forever.
+   * The pending decisions that belong to the turn currently waiting.
+   *
+   * A prompt left over from a finished turn says nothing about this one, so arming the
+   * recheck loop, renewing the stall budget and terminalizing all read the same scope.
+   * Without it a stale but still answerable prompt renewed a later turn's budget at
+   * every expiry while the generation-scoped recheck ignored it — unbounded thinking
+   * for a turn with no prompt of its own.
+   */
+  private *currentTurnPendingPermissionDecisions(): Generator<
+    [string, PendingPermissionDecisionState]
+  > {
+    for (const entry of this.pendingPermissionDecisions) {
+      if (entry[1].turnGeneration !== this.turnGeneration) continue;
+      yield entry;
+    }
+  }
+
+  private hasCurrentTurnPendingPermissionDecision(): boolean {
+    return this.currentTurnPendingPermissionDecisions().next().done !== true;
+  }
+
+  /**
+   * Whether some pending permission decision of this turn is provably published and
+   * actionable, and therefore explains the provider's silence. Unverifiable or orphaned
+   * prompts are deliberately excluded so they cannot suspend the watchdog forever.
    */
   private hasActionablePendingPermissionDecision(): boolean {
-    for (const requestId of this.pendingPermissionDecisions.keys()) {
+    for (const [requestId] of this.currentTurnPendingPermissionDecisions()) {
       if (this.isPendingPermissionRequestActionable(requestId)) return true;
     }
     return false;
@@ -3390,7 +3412,7 @@ export class AcpBackend implements AgentBackend {
       this.waitingForResponse &&
       this.responseCompletionStallIsImplicit &&
       this.responseCompletionTimeoutRejecter !== null &&
-      this.pendingPermissionDecisions.size > 0;
+      this.hasCurrentTurnPendingPermissionDecision();
     if (!shouldRun) {
       this.stopPermissionActionabilityRecheck();
       return;
@@ -3406,60 +3428,61 @@ export class AcpBackend implements AgentBackend {
 
   /**
    * Observes actionability while permission decisions are pending. It never decides,
-   * denies or approves a prompt, and it imposes no deadline on a person, because an
-   * actionable prompt simply keeps the loop running.
+   * denies or approves a prompt, and it imposes no deadline on a person.
    *
-   * Losing actionability is only terminal for a request that *had* it, and only once
-   * every pending request of this turn has lost it. A request that has never been
-   * published yet may still be mid-write, so it keeps the ordinary stall budget as its
-   * publication grace — including a replacement registered after an earlier prompt
-   * disappeared. The loss must also be seen on two consecutive rechecks per request,
-   * which costs one interval and removes the narrow window where a prompt has just been
-   * answered but `endPendingPermissionDecision()` has not run yet.
+   * Each request of this turn is judged on its own history. A request observed
+   * actionable and then unactionable on two consecutive rechecks is *confirmed lost*:
+   * the two observations cost one interval and remove the narrow window where a prompt
+   * has just been answered but `endPendingPermissionDecision()` has not run yet. A
+   * request that has never been published may still be mid-write, so it keeps the
+   * ordinary stall budget as its publication grace — including a replacement registered
+   * after an earlier prompt disappeared.
+   *
+   * The turn terminalizes as soon as any request is confirmed lost and no request is
+   * currently actionable. A currently actionable request always keeps the turn alive,
+   * because a person really can still answer it and the provider is legitimately
+   * blocked on that decision. Publication grace, by contrast, belongs to the
+   * unpublished request alone: it never explains the silence for a *different* request
+   * already proven lost, which previously left that loss undetected for a whole stall
+   * period of plain "thinking".
    */
   private recheckPermissionActionability(): void {
     if (
       !this.waitingForResponse ||
       !this.responseCompletionStallIsImplicit ||
-      this.pendingPermissionDecisions.size === 0
+      !this.hasCurrentTurnPendingPermissionDecision()
     ) {
       this.stopPermissionActionabilityRecheck();
       return;
     }
 
-    let observedRequests = 0;
-    let confirmedLostRequests = 0;
-    let silenceStillExplained = false;
-    for (const [requestId, state] of this.pendingPermissionDecisions) {
-      // A prompt left over from a finished turn says nothing about this one.
-      if (state.turnGeneration !== this.turnGeneration) continue;
-      observedRequests += 1;
-
+    let anyActionable = false;
+    let anyConfirmedLost = false;
+    for (const [requestId, state] of this.currentTurnPendingPermissionDecisions()) {
       if (this.isPendingPermissionRequestActionable(requestId)) {
         state.sawActionable = true;
         state.lossObservations = 0;
-        silenceStillExplained = true;
+        anyActionable = true;
         continue;
       }
       if (!state.sawActionable) {
-        // Never published yet: the ordinary stall budget is its grace period.
+        // Never published yet: the ordinary stall budget is its own grace period.
         state.lossObservations = 0;
-        silenceStillExplained = true;
         continue;
       }
       state.lossObservations += 1;
       if (state.lossObservations >= PERMISSION_ACTIONABILITY_LOSS_CONFIRMATIONS) {
-        confirmedLostRequests += 1;
+        anyConfirmedLost = true;
       }
     }
 
-    if (silenceStillExplained) return;
-    if (observedRequests === 0 || confirmedLostRequests < observedRequests) return;
+    if (anyActionable || !anyConfirmedLost) return;
 
     this.stopPermissionActionabilityRecheck();
-    // Every prompt of this turn was answerable and is not any more, so the provider is
-    // blocked on a decision that can never arrive. Spend the budget now rather than
-    // waiting out a provider-silence period the user experiences as unexplained thinking.
+    // A prompt of this turn was answerable and is not any more, and nothing else this
+    // turn is answerable either, so the provider is blocked on a decision that can never
+    // arrive. Spend the budget now rather than waiting out a provider-silence period the
+    // user experiences as unexplained thinking.
     this.armResponseCompletionTimeout(0);
   }
 
@@ -3496,11 +3519,11 @@ export class AcpBackend implements AgentBackend {
     this.bumpResponseCompletionTimeout();
   }
 
-  /** Restarts the stall budget from now once the last pending decision resolves. */
+  /** Restarts the stall budget from now once this turn's last pending decision resolves. */
   private endPendingPermissionDecision(requestId: string): void {
     this.pendingPermissionDecisions.delete(requestId);
     this.syncPermissionActionabilityRecheck();
-    if (this.pendingPermissionDecisions.size > 0) return;
+    if (this.hasCurrentTurnPendingPermissionDecision()) return;
     this.bumpResponseCompletionTimeout();
   }
 
