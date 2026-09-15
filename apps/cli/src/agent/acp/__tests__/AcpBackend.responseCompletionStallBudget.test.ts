@@ -115,27 +115,105 @@ describe('AcpBackend response-completion stall budget', () => {
     }
   });
 
-  it('does not expire the turn while a human permission decision is pending', async () => {
-    const { backend } = createBackend();
+  it('does not expire the turn while a published, actionable human permission decision is pending', async () => {
+    const actionable = new Set<string>(['perm-1']);
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: async () => ({ decision: 'approved' }),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
     const observed = backend
       .waitForResponseComplete()
       .then(() => 'resolved' as const, (error: Error) => error);
 
     await sendUpdate(backend, 'about to ask');
-    (backend as any).beginPendingPermissionDecision();
+    (backend as any).beginPendingPermissionDecision('perm-1');
 
     // A human takes far longer than the stall budget to answer.
     await vi.advanceTimersByTimeAsync(STALL_MS * 4);
     expect(await Promise.race([observed, Promise.resolve('pending' as const)])).toBe('pending');
 
     // Resolving the decision re-arms the watchdog rather than leaving it suspended.
-    (backend as any).endPendingPermissionDecision();
+    (backend as any).endPendingPermissionDecision('perm-1');
     await flush();
     expect((backend as any).responseCompletionTimeout).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(STALL_MS + 1);
     const result = await observed;
     expect(result).toBeInstanceOf(Error);
+  });
+
+  it('fails deterministically when the pending permission request is never published or actionable', async () => {
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: async () => ({ decision: 'approved' }),
+        // Publication failed: no client can ever see or answer this prompt.
+        isPendingRequestActionable: () => false,
+      },
+    });
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-unpublished');
+
+    await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+    const result = await observed;
+    expect(result).toBeInstanceOf(Error);
+    // The same visible terminal path the runtime turns into `lastRuntimeIssue`.
+    expect((backend as any).lastTurnOutcome?.kind).toBe('failed');
+    expect((backend as any).waitingForResponse).toBe(false);
+  });
+
+  it('suspends instead of failing when publication lands after the request was registered', async () => {
+    const actionable = new Set<string>();
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: async () => ({ decision: 'approved' }),
+        isPendingRequestActionable: (id: string) => actionable.has(id),
+      },
+    });
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-late');
+
+    // The durable agent-state write completes slightly after the provider blocked.
+    actionable.add('perm-late');
+
+    await vi.advanceTimersByTimeAsync(STALL_MS * 4);
+    expect(await Promise.race([observed, Promise.resolve('pending' as const)])).toBe('pending');
+    expect((backend as any).waitingForResponse).toBe(true);
+  });
+
+  it('does not double-terminalize when the connection closes after an unactionable permission expired', async () => {
+    const { backend } = createBackend({
+      permissionHandler: {
+        handleToolCall: async () => ({ decision: 'approved' }),
+        isPendingRequestActionable: () => false,
+      },
+    });
+    const observed = backend
+      .waitForResponseComplete()
+      .then(() => 'resolved' as const, (error: Error) => error);
+
+    await sendUpdate(backend, 'about to ask');
+    (backend as any).beginPendingPermissionDecision('perm-unpublished');
+    await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+    await observed;
+
+    const firstOutcome = (backend as any).lastTurnOutcome;
+    expect(firstOutcome?.kind).toBe('failed');
+    expect((backend as any).waitingForResponse).toBe(false);
+
+    // A later connection close for the same turn must not replace the first outcome.
+    (backend as any).handleProviderStreamTerminated('ACP connection closed');
+    expect((backend as any).lastTurnOutcome).toBe(firstOutcome);
+    expect((backend as any).responseCompletionError).toBeNull();
   });
 
   it('reaches a terminal failed outcome and clears active turn state on expiry', async () => {

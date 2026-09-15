@@ -30,6 +30,7 @@ const PENDING_REQUEST_COVERAGE_OPTIONS = {
 } as const;
 
 const PERMISSION_RESPONSE_CLAIM_V1 = 'permissionResponseClaimV1';
+export { PERMISSION_RESPONSE_CLAIM_V1 };
 
 function hasOwnProperty(value: unknown, key: string): value is Record<string, unknown> {
     return !!value

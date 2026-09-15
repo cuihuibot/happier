@@ -378,6 +378,16 @@ export interface AcpPermissionHandler {
   cancelPendingRequest?(requestId: string, reason: string): boolean;
 
   /**
+   * Whether a decision on `requestId` can still reach a client and resolve this
+   * runtime's waiter.
+   *
+   * Only such a request represents a real human decision, so only such a request may
+   * suspend the turn's response-completion stall budget. Handlers that cannot prove
+   * publication simply omit this, and their prompts keep the ordinary budget.
+   */
+  isPendingRequestActionable?(requestId: string): boolean;
+
+  /**
    * Abort any ACP permission requests still waiting on user/provider state.
    *
    * This is intentionally event-driven from turn finalization/cancellation, not timer-based.
@@ -1624,9 +1634,9 @@ export class AcpBackend implements AgentBackend {
         // Use permission handler if provided, otherwise auto-approve
         if (this.options.permissionHandler) {
           try {
-            // The turn's stall budget is suspended for exactly as long as the human
-            // decision is outstanding, then re-armed.
-            this.beginPendingPermissionDecision();
+            // The turn's stall budget is suspended for exactly as long as a published,
+            // actionable human decision is outstanding, then re-armed.
+            this.beginPendingPermissionDecision(permissionId);
             let result: Awaited<ReturnType<typeof this.options.permissionHandler.handleToolCall>>;
             try {
               result = await this.options.permissionHandler.handleToolCall(
@@ -1635,7 +1645,7 @@ export class AcpBackend implements AgentBackend {
                 input
               );
             } finally {
-              this.endPendingPermissionDecision();
+              this.endPendingPermissionDecision(permissionId);
             }
 
             const isApproved = result.decision === 'approved'
@@ -2788,7 +2798,7 @@ export class AcpBackend implements AgentBackend {
   private responseCompletionTimeout: NodeJS.Timeout | null = null;
   private responseCompletionTimeoutRejecter: (() => void) | null = null;
   /** Permission decisions currently awaiting a human answer on this backend. */
-  private pendingPermissionDecisions = 0;
+  private pendingPermissionDecisionIds = new Set<string>();
   /**
    * Whether the active wait uses the implicit default stall budget rather than a
    * ceiling the caller chose. Only the implicit budget is suspended for permission
@@ -3253,12 +3263,29 @@ export class AcpBackend implements AgentBackend {
     );
   }
 
+  /**
+   * Whether some pending permission decision is provably published and actionable, and
+   * therefore explains the provider's silence. Unverifiable or orphaned prompts are
+   * deliberately excluded so they cannot suspend the watchdog forever.
+   */
+  private hasActionablePendingPermissionDecision(): boolean {
+    if (this.pendingPermissionDecisionIds.size === 0) return false;
+    const isActionable = this.options.permissionHandler?.isPendingRequestActionable;
+    if (typeof isActionable !== 'function') return true;
+    const handler = this.options.permissionHandler;
+    for (const requestId of this.pendingPermissionDecisionIds) {
+      if (isActionable.call(handler, requestId)) return true;
+    }
+    return false;
+  }
+
   private bumpResponseCompletionTimeout(): void {
     if (!this.waitingForResponse) return;
-    // A human deciding a permission prompt is not provider silence. Stay suspended
-    // until the decision resolves, otherwise an update that arrives while the prompt
-    // is open would re-arm a budget that then expires on the person, not the provider.
-    if (this.responseCompletionStallIsImplicit && this.pendingPermissionDecisions > 0) {
+    // A human deciding a *published, actionable* permission prompt is not provider
+    // silence. Stay suspended until that decision resolves, otherwise an update that
+    // arrives while the prompt is open would re-arm a budget that then expires on the
+    // person, not the provider. A prompt nobody can see gets no such protection.
+    if (this.responseCompletionStallIsImplicit && this.hasActionablePendingPermissionDecision()) {
       if (this.responseCompletionTimeout) {
         clearTimeout(this.responseCompletionTimeout);
         this.responseCompletionTimeout = null;
@@ -3279,30 +3306,33 @@ export class AcpBackend implements AgentBackend {
     this.responseCompletionTimeout = setTimeout(() => {
       this.responseCompletionTimeout = null;
       // Avoid stale timeouts firing after the waiter has already been cleared.
-      if (this.responseCompletionTimeoutRejecter === rejecter) {
-        rejecter();
+      if (this.responseCompletionTimeoutRejecter !== rejecter) return;
+      // Publication can land after the provider blocked. Re-check at expiry so a prompt
+      // that became actionable meanwhile suspends the budget instead of failing the turn.
+      if (this.responseCompletionStallIsImplicit && this.hasActionablePendingPermissionDecision()) {
+        return;
       }
+      rejecter();
     }, Math.trunc(timeoutMs));
     this.responseCompletionTimeout.unref?.();
   }
 
   /**
-   * Suspends the response-completion stall budget while a human decides a permission
-   * prompt. The provider is legitimately silent for as long as the person takes.
+   * Suspends the response-completion stall budget while a human decides a published,
+   * actionable permission prompt. The provider is legitimately silent for as long as the
+   * person takes. A prompt that is not (yet) actionable keeps the budget armed, so an
+   * invisible prompt terminalizes deterministically instead of hanging the turn.
    */
-  private beginPendingPermissionDecision(): void {
-    this.pendingPermissionDecisions += 1;
+  private beginPendingPermissionDecision(requestId: string): void {
+    this.pendingPermissionDecisionIds.add(requestId);
     if (!this.responseCompletionStallIsImplicit) return;
-    if (this.responseCompletionTimeout) {
-      clearTimeout(this.responseCompletionTimeout);
-      this.responseCompletionTimeout = null;
-    }
+    this.bumpResponseCompletionTimeout();
   }
 
   /** Re-arms the stall budget once the last pending permission decision resolves. */
-  private endPendingPermissionDecision(): void {
-    if (this.pendingPermissionDecisions > 0) this.pendingPermissionDecisions -= 1;
-    if (this.pendingPermissionDecisions === 0) this.bumpResponseCompletionTimeout();
+  private endPendingPermissionDecision(requestId: string): void {
+    this.pendingPermissionDecisionIds.delete(requestId);
+    if (this.pendingPermissionDecisionIds.size === 0) this.bumpResponseCompletionTimeout();
   }
 
   /**
@@ -4438,6 +4468,7 @@ export class AcpBackend implements AgentBackend {
     await this.plans.reset();
     this.planStatePublisher = null;
     this.pendingPermissions.clear();
+    this.pendingPermissionDecisionIds.clear();
     this.permissionToToolCallMap.clear();
     this.lastSelectedPermissionOptionIdByToolCallId.clear();
     this.pendingTurnOutcome = null;

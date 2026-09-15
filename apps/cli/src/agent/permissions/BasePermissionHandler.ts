@@ -501,6 +501,22 @@ export abstract class BasePermissionHandler {
         return this.requestCoordinator.isRequestClaimed(requestId);
     }
 
+    /**
+     * True only while a decision on `requestId` can still reach a client and resolve the
+     * waiter this runtime owns: the request is durably published in agent state, no newer
+     * runtime has claimed the response, and the waiter is still pending here.
+     *
+     * A blocked provider is only legitimately waiting on a person when this holds. An
+     * unpublished or orphaned request is invisible to every client, so treating it as a
+     * human decision would turn it into silent, unbounded thinking.
+     */
+    isPendingRequestActionable(requestId: string): boolean {
+        if (!this.pendingRequests.has(requestId)) return false;
+        if (this.isPermissionRequestClaimed(requestId)) return false;
+        if (this.requestStore.isOutstandingRequestClaimed(requestId)) return false;
+        return this.requestStore.hasOutstandingRequest(requestId);
+    }
+
     protected recordAutoDecision(
         toolCallId: string,
         toolName: string,
