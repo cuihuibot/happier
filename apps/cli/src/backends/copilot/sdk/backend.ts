@@ -440,6 +440,14 @@ export function createCopilotSdkBackend(params: CopilotSdkBackendParams) {
     | { kind: 'failed'; error: Error };
   let turnOutcome: TurnOutcome | null = null;
   let notifyTurnOutcome: (() => void) | null = null;
+  /**
+   * Refreshes the implicit settlement stall budget, or null when no implicit
+   * wait is armed. Native progress and a resolved permission decision both go
+   * through it so the budget bounds native *inactivity*, never turn length.
+   */
+  let refreshSettlementStall: (() => void) | null = null;
+  /** Native permission requests currently awaiting a host decision. */
+  let pendingNativePermissionRequests = 0;
 
   const recordTurnOutcome = (outcome: TurnOutcome): void => {
     // First write wins: a later racing signal can never rewrite a terminal
@@ -466,6 +474,8 @@ export function createCopilotSdkBackend(params: CopilotSdkBackendParams) {
   };
 
   const onNativeEvent = (event: NativeEvent): void => {
+    // Any native event is proof of life for the turn; see refreshSettlementStall.
+    refreshSettlementStall?.();
     const data = nativeEventData(event);
     if (event.type === 'assistant.usage') {
       recordUsageObservation(data);
@@ -519,12 +529,22 @@ export function createCopilotSdkBackend(params: CopilotSdkBackendParams) {
       if (!params.onPermissionRequest) {
         return { kind: 'reject', feedback: 'No host permission bridge is configured' };
       }
-      return params.onPermissionRequest(permissionId, described.toolName, {
-        ...described.input,
-        ...(described.nativeToolCallId
-          ? { nativeToolCallId: described.nativeToolCallId }
-          : {}),
-      });
+      // A human deciding this request is not native inactivity, so the implicit
+      // settlement budget is suspended for exactly as long as the decision is
+      // outstanding and re-armed once it resolves.
+      pendingNativePermissionRequests += 1;
+      refreshSettlementStall?.();
+      try {
+        return await params.onPermissionRequest(permissionId, described.toolName, {
+          ...described.input,
+          ...(described.nativeToolCallId
+            ? { nativeToolCallId: described.nativeToolCallId }
+            : {}),
+        });
+      } finally {
+        pendingNativePermissionRequests -= 1;
+        refreshSettlementStall?.();
+      }
     },
     streaming: false,
     workingDirectory: params.directory,
@@ -922,17 +942,31 @@ export function createCopilotSdkBackend(params: CopilotSdkBackendParams) {
       // The canonical owner passes nothing (createAcpRuntime.ts:2184,2565), so
       // the backend must bound the wait itself; it has no native liveness
       // channel to fall back on.
-      const effectiveTimeoutMs =
+      //
+      // An explicit positive caller timeout stays a hard ceiling: cancellation and
+      // cleanup paths depend on it firing regardless of progress. An explicit `0`
+      // or `null` is a deliberate unbounded opt-out. With no argument the bound is
+      // an implicit STALL budget on native inactivity, refreshed by native events
+      // and suspended across host permission decisions, because the previous
+      // single non-refreshed timer aborted healthy turns purely for lasting
+      // longer than the settlement bound.
+      const callerCeilingMs =
         typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
           ? Math.trunc(timeoutMs)
-          : (params.settlementTimeoutMs ?? DEFAULT_SETTLEMENT_TIMEOUT_MS);
+          : null;
+      const configuredStallMs = params.settlementTimeoutMs ?? DEFAULT_SETTLEMENT_TIMEOUT_MS;
+      const implicitStallMs =
+        timeoutMs === undefined && Number.isFinite(configuredStallMs) && configuredStallMs > 0
+          ? Math.trunc(configuredStallMs)
+          : null;
+      const effectiveTimeoutMs = callerCeilingMs ?? implicitStallMs;
 
       const settlement = (async (): Promise<void> => {
         if (!turnOutcome) {
           let timer: NodeJS.Timeout | undefined;
           await new Promise<void>((resolve) => {
             notifyTurnOutcome = resolve;
-            timer = setTimeout(() => {
+            const expire = (): void => {
               // The timeout is itself a terminal failure and is latched BEFORE
               // the abort round trip. Recording it afterwards let a racing idle
               // emitted by abort rewrite the timeout into success.
@@ -942,9 +976,25 @@ export function createCopilotSdkBackend(params: CopilotSdkBackendParams) {
                   `Copilot SDK backend: native turn timed out after ${effectiveTimeoutMs}ms`,
                 ),
               });
-            }, effectiveTimeoutMs);
+            };
+            if (effectiveTimeoutMs === null) return;
+            if (callerCeilingMs !== null) {
+              timer = setTimeout(expire, callerCeilingMs);
+              return;
+            }
+            const stallMs = implicitStallMs as number;
+            refreshSettlementStall = () => {
+              if (timer) clearTimeout(timer);
+              timer = undefined;
+              if (turnOutcome) return;
+              // Stay suspended while a host permission decision is outstanding.
+              if (pendingNativePermissionRequests > 0) return;
+              timer = setTimeout(expire, stallMs);
+            };
+            refreshSettlementStall();
           });
           if (timer) clearTimeout(timer);
+          refreshSettlementStall = null;
           notifyTurnOutcome = null;
         }
 
