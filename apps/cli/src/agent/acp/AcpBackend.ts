@@ -264,6 +264,33 @@ function resolveIdleWithoutAssistantMessageTimeoutMs(transport: TransportHandler
 }
 
 /**
+ * Stall budget applied when the caller supplies no response-completion timeout.
+ *
+ * The generic ACP runtime calls `waitForResponseComplete()` with no argument, so
+ * without this the wait is unbounded and a provider that stops emitting anything
+ * without answering `session/prompt` strands the turn with no terminal outcome.
+ *
+ * It bounds *silence*, not turn length: any session/update refreshes it and a
+ * pending permission decision suspends it, so the value only has to exceed the
+ * longest plausible gap between two provider signals.
+ */
+const DEFAULT_RESPONSE_COMPLETION_STALL_MS = 600_000;
+
+function resolveResponseCompletionStallMs(transport: TransportHandler): number {
+  const transportValue = transport.getResponseCompletionStallMs?.();
+  if (typeof transportValue === 'number' && Number.isFinite(transportValue) && transportValue > 0) {
+    return Math.trunc(transportValue);
+  }
+
+  const envValue =
+    readPositiveIntEnv('HAPPIER_ACP_RESPONSE_COMPLETION_STALL_MS') ??
+    readPositiveIntEnv('HAPPY_ACP_RESPONSE_COMPLETION_STALL_MS');
+  if (envValue != null) return envValue;
+
+  return DEFAULT_RESPONSE_COMPLETION_STALL_MS;
+}
+
+/**
  * Retry configuration for ACP operations
  */
 const RETRY_CONFIG = {
@@ -1305,6 +1332,10 @@ export class AcpBackend implements AgentBackend {
 	        this.lastProcessExitDetail = detail;
 	        this.failPendingResponseWait(new Error(detail));
 	        this.emit({ type: 'status', status: 'error', detail });
+	      } else if (!this.disposed) {
+	        // A clean `exit 0` before the prompt response is still a silent stop for the
+	        // in-flight turn. It is a no-op once the turn already reached a terminal outcome.
+	        this.handleProviderStreamTerminated('Exit code: 0');
 	      }
 
 	      void this.stderrAppender?.close().catch(() => {});
@@ -1593,11 +1624,19 @@ export class AcpBackend implements AgentBackend {
         // Use permission handler if provided, otherwise auto-approve
         if (this.options.permissionHandler) {
           try {
-            const result = await this.options.permissionHandler.handleToolCall(
-              toolCallId,
-              toolName,
-              input
-            );
+            // The turn's stall budget is suspended for exactly as long as the human
+            // decision is outstanding, then re-armed.
+            this.beginPendingPermissionDecision();
+            let result: Awaited<ReturnType<typeof this.options.permissionHandler.handleToolCall>>;
+            try {
+              result = await this.options.permissionHandler.handleToolCall(
+                toolCallId,
+                toolName,
+                input
+              );
+            } finally {
+              this.endPendingPermissionDecision();
+            }
 
             const isApproved = result.decision === 'approved'
               || result.decision === 'approved_for_session'
@@ -1691,6 +1730,11 @@ export class AcpBackend implements AgentBackend {
         this.createExtensionHandlerContext(method, sdkSignal)
       ),
     });
+
+    // No `connection.closed` observer: for a spawned provider the close is always
+    // accompanied by a process exit, which terminalizes with the precise cause
+    // (signal / exit code / clean exit). Racing it here only replaced that cause
+    // with a vaguer one, so it is duplicative rather than additive.
 
     // Initialize the connection with timeout and retry
     const initRequest = buildInitializeRequest({
@@ -2743,6 +2787,15 @@ export class AcpBackend implements AgentBackend {
   private responseCompletionTimeoutMs: number | null = null;
   private responseCompletionTimeout: NodeJS.Timeout | null = null;
   private responseCompletionTimeoutRejecter: (() => void) | null = null;
+  /** Permission decisions currently awaiting a human answer on this backend. */
+  private pendingPermissionDecisions = 0;
+  /**
+   * Whether the active wait uses the implicit default stall budget rather than a
+   * ceiling the caller chose. Only the implicit budget is suspended for permission
+   * decisions: an explicit timeout is a deliberate owner ceiling that cancellation
+   * and permission-denial cleanup depend on firing.
+   */
+  private responseCompletionStallIsImplicit = false;
   private pendingPromptResponseTurnGeneration: number | null = null;
   private idleStatusDeferredUntilPromptResponse = false;
 
@@ -3202,6 +3255,16 @@ export class AcpBackend implements AgentBackend {
 
   private bumpResponseCompletionTimeout(): void {
     if (!this.waitingForResponse) return;
+    // A human deciding a permission prompt is not provider silence. Stay suspended
+    // until the decision resolves, otherwise an update that arrives while the prompt
+    // is open would re-arm a budget that then expires on the person, not the provider.
+    if (this.responseCompletionStallIsImplicit && this.pendingPermissionDecisions > 0) {
+      if (this.responseCompletionTimeout) {
+        clearTimeout(this.responseCompletionTimeout);
+        this.responseCompletionTimeout = null;
+      }
+      return;
+    }
 
     const timeoutMs = this.responseCompletionTimeoutMs;
     const rejecter = this.responseCompletionTimeoutRejecter;
@@ -3221,6 +3284,41 @@ export class AcpBackend implements AgentBackend {
       }
     }, Math.trunc(timeoutMs));
     this.responseCompletionTimeout.unref?.();
+  }
+
+  /**
+   * Suspends the response-completion stall budget while a human decides a permission
+   * prompt. The provider is legitimately silent for as long as the person takes.
+   */
+  private beginPendingPermissionDecision(): void {
+    this.pendingPermissionDecisions += 1;
+    if (!this.responseCompletionStallIsImplicit) return;
+    if (this.responseCompletionTimeout) {
+      clearTimeout(this.responseCompletionTimeout);
+      this.responseCompletionTimeout = null;
+    }
+  }
+
+  /** Re-arms the stall budget once the last pending permission decision resolves. */
+  private endPendingPermissionDecision(): void {
+    if (this.pendingPermissionDecisions > 0) this.pendingPermissionDecisions -= 1;
+    if (this.pendingPermissionDecisions === 0) this.bumpResponseCompletionTimeout();
+  }
+
+  /**
+   * Terminalizes an in-flight turn when the provider stream ends without a prompt
+   * response. A clean `exit 0` and a closed ACP connection are both silent stops for
+   * a turn that is still waiting, and neither previously produced a terminal outcome.
+   *
+   * Delegates to `failPendingResponseWait()` so first-terminal-outcome-wins holds and
+   * a later signal for the same turn can never double-terminalize it.
+   */
+  private handleProviderStreamTerminated(detail: string): void {
+    if (this.disposed) return;
+    if (!this.waitingForResponse) return;
+    logger.debug(`[AcpBackend] Provider stream ended while awaiting a response: ${detail}`);
+    this.failPendingResponseWait(new Error(detail));
+    this.emit({ type: 'status', status: 'error', detail });
   }
 
   private failPendingResponseWait(error: Error): void {
@@ -3897,9 +3995,16 @@ export class AcpBackend implements AgentBackend {
 
       // Treat the timeout as a stall budget. While the agent continues emitting session/update
       // traffic, `handleSessionUpdate()` will keep bumping this timeout forward.
+      //
+      // An omitted timeout is not a request to wait forever: the generic ACP runtime always
+      // calls this with no argument, so it falls back to the configured stall budget. Passing
+      // an explicit `null` or `0` remains a deliberate unbounded opt-out.
+      this.responseCompletionStallIsImplicit = timeoutMs === undefined;
+      const requestedTimeoutMs =
+        timeoutMs === undefined ? resolveResponseCompletionStallMs(this.transport) : timeoutMs;
       const stallTimeoutMs =
-        typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
-          ? Math.trunc(timeoutMs)
+        typeof requestedTimeoutMs === 'number' && Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+          ? Math.trunc(requestedTimeoutMs)
           : null;
       if (typeof stallTimeoutMs === 'number') {
         this.responseCompletionTimeoutMs = stallTimeoutMs;

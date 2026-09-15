@@ -239,6 +239,13 @@ export interface TransportHandler {
   getIdleWithoutAssistantMessageTimeoutMs?(): number;
 
   /**
+   * Stall budget for `waitForResponseComplete()` when the caller supplies no
+   * timeout. Refreshed by session/update traffic and suspended while a permission
+   * decision is pending, so it bounds provider silence rather than turn length.
+   */
+  getResponseCompletionStallMs?(): number;
+
+  /**
    * Optional override for ACP permission option selection.
    *
    * Some ACP agents expose permission options that are semantically equivalent but can differ in
