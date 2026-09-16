@@ -1,5 +1,10 @@
 import fs from 'node:fs';
 
+import {
+  decodeServicePlistString,
+  extractLaunchdPlistEnv,
+} from './installedServiceEnvCarryOver';
+
 /**
  * Semantic equivalence check for darwin launchd plist service definitions.
  *
@@ -13,12 +18,18 @@ import fs from 'node:fs';
  * `[shim, daemon, start-sync]` form.
  *
  * This comparator extracts only the fields that materially determine runtime
- * behavior and compares those. It intentionally ignores `PATH` and normalises
- * ProgramArguments so shim/node+entry forms are treated as equivalent as long
- * as the Happier env vars (which govern what actually runs) match.
+ * behavior and compares those. It intentionally ignores `PATH`, which the
+ * planner now carries over from the installed definition instead of
+ * regenerating from the invoking shell.
  *
- * Returns true when both definitions would launch the same daemon under the
- * same Happier home, channel, and target mode — i.e. no meaningful drift.
+ * `ProgramArguments` is compared exactly: it pins which CLI build the daemon
+ * runs. Treating a differing launcher or entry path as equivalent made
+ * promotion silent — `happier service restart` saw no drift and rebooted the
+ * previously pinned build. Exact comparison makes the supported restart
+ * refresh the pinned definition to the CLI performing it.
+ *
+ * Returns true when both definitions would launch the same daemon build under
+ * the same Happier home, channel, and target mode — i.e. no meaningful drift.
  */
 export function doesInstalledDaemonServiceDefinitionMatchExpected(params: Readonly<{
   installedPath: string;
@@ -59,9 +70,9 @@ function compareServiceSignatures(a: PlistSignature, b: PlistSignature): boolean
   if (a.workingDirectory !== b.workingDirectory) return false;
   if (a.stdoutPath !== b.stdoutPath) return false;
   if (a.stderrPath !== b.stderrPath) return false;
-  if (!compareProgramArgumentsSemantically(a.programArguments, b.programArguments)) return false;
-  // Drop PATH from both sides — it is populated from the caller's environment
-  // and drifts per invocation (fnm shells, cwd node_modules/.bin cascades).
+  if (!equalStringLists(a.programArguments, b.programArguments)) return false;
+  // Drop PATH from both sides — the installed value is authoritative and is
+  // carried over by the planner rather than regenerated per invocation.
   const aEnv = stripNoiseEnvKeys(a.env);
   const bEnv = stripNoiseEnvKeys(b.env);
   return shallowEqualStringMap(aEnv, bEnv);
@@ -88,39 +99,12 @@ function shallowEqualStringMap(a: Readonly<Record<string, string>>, b: Readonly<
   return true;
 }
 
-/**
- * Two ProgramArguments arrays are semantically equivalent if they launch the
- * same CLI with the same trailing args. Three canonical shapes:
- *   - `[shim, 'daemon', 'start-sync']`              (shim form)
- *   - `[node, entry.mjs, 'daemon', 'start-sync']`    (node + entry form)
- *   - Future/legacy variants that still end in the same trailing args.
- *
- * We consider them equivalent when the trailing args match. The leading
- * launcher differs (shim vs node+entry), but the daemon reads its behavior
- * from the env vars (HAPPIER_HOME_DIR + HAPPIER_PUBLIC_RELEASE_CHANNEL +
- * HAPPIER_DAEMON_SERVICE_TARGET_MODE), which ARE compared strictly below.
- * Since those env vars pin the CLI install + channel + mode, a drifted
- * launcher path still ends up running the same daemon under the same config.
- */
-function compareProgramArgumentsSemantically(a: readonly string[], b: readonly string[]): boolean {
-  const aTrailing = trailingCommandArgs(a);
-  const bTrailing = trailingCommandArgs(b);
-  if (aTrailing.length !== bTrailing.length) return false;
-  for (let i = 0; i < aTrailing.length; i++) {
-    if (aTrailing[i] !== bTrailing[i]) return false;
+function equalStringLists(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
   }
   return true;
-}
-
-function trailingCommandArgs(args: readonly string[]): readonly string[] {
-  // Locate the `daemon` subcommand — everything from there on is the trailing
-  // command. This is robust to both `[shim, daemon, start-sync]` and
-  // `[node, entry, daemon, start-sync]` shapes.
-  const daemonIndex = args.indexOf('daemon');
-  if (daemonIndex >= 0) return args.slice(daemonIndex);
-  // No `daemon` token found — fall back to comparing the whole array so a
-  // genuinely different service shape still flags as drift.
-  return args;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -135,7 +119,7 @@ function extractPlistSignature(plistXml: string): PlistSignature | null {
   return {
     label,
     programArguments,
-    env: extractPlistDictStrings(plistXml, 'EnvironmentVariables'),
+    env: extractLaunchdPlistEnv(plistXml),
     workingDirectory: extractPlistStringValue(plistXml, 'WorkingDirectory') ?? '',
     stdoutPath: extractPlistStringValue(plistXml, 'StandardOutPath') ?? '',
     stderrPath: extractPlistStringValue(plistXml, 'StandardErrorPath') ?? '',
@@ -145,7 +129,7 @@ function extractPlistSignature(plistXml: string): PlistSignature | null {
 function extractPlistStringValue(plistXml: string, key: string): string | null {
   const pattern = new RegExp(`<key>${escapeRegex(key)}</key>\\s*<string>([\\s\\S]*?)</string>`);
   const match = plistXml.match(pattern);
-  return match ? decodePlistString(match[1]) : null;
+  return match ? decodeServicePlistString(match[1]) : null;
 }
 
 function extractPlistArrayStrings(plistXml: string, key: string): readonly string[] {
@@ -157,39 +141,9 @@ function extractPlistArrayStrings(plistXml: string, key: string): readonly strin
   const stringPattern = /<string>([\s\S]*?)<\/string>/g;
   let m: RegExpExecArray | null;
   while ((m = stringPattern.exec(arrayBody)) !== null) {
-    strings.push(decodePlistString(m[1]));
+    strings.push(decodeServicePlistString(m[1]));
   }
   return strings;
-}
-
-function extractPlistDictStrings(plistXml: string, key: string): Readonly<Record<string, string>> {
-  const pattern = new RegExp(`<key>${escapeRegex(key)}</key>\\s*<dict>([\\s\\S]*?)</dict>`);
-  const match = plistXml.match(pattern);
-  if (!match) return {};
-  const dictBody = match[1];
-  // Pairs are <key>K</key><string>V</string>. We accept `<true/>`/`<false/>`
-  // for completeness too, stringifying as 'true'/'false'. Non-string values
-  // in Happier service plists are rare, but we shouldn't crash if encountered.
-  const out: Record<string, string> = {};
-  const pairPattern = /<key>([\s\S]*?)<\/key>\s*(?:<string>([\s\S]*?)<\/string>|<(true|false)\s*\/>)/g;
-  let m: RegExpExecArray | null;
-  while ((m = pairPattern.exec(dictBody)) !== null) {
-    const k = decodePlistString(m[1]);
-    const v = m[2] !== undefined ? decodePlistString(m[2]) : (m[3] ?? '');
-    out[k] = v;
-  }
-  return out;
-}
-
-function decodePlistString(raw: string): string {
-  // Minimal XML entity decoding. Happier plists only ever emit &amp; &lt; &gt;
-  // because values are paths/ids/env var names — no quotes inside strings.
-  return raw
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, '\'')
-    .replace(/&amp;/g, '&');
 }
 
 function escapeRegex(value: string): string {

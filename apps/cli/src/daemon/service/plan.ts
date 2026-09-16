@@ -8,6 +8,7 @@ import {
 } from '@/settings/copilotSdkExperimentSettings';
 
 import { buildLaunchAgentPlistXml, buildLaunchdPath } from './darwin';
+import { readInstalledDaemonServiceEnvCarryOver } from './installedServiceEnvCarryOver';
 import { buildServicePath, planServiceAction, renderSystemdServiceUnit, renderWindowsScheduledTaskWrapperPs1 } from '@happier-dev/cli-common/service';
 
 export type DaemonServicePlatform = 'darwin' | 'linux' | 'win32';
@@ -310,10 +311,16 @@ export function planDaemonServiceInstall(params: Readonly<{
     const stdoutPath = join(params.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.out.log`);
     const stderrPath = join(params.happierHomeDir, 'logs', `daemon-service.${logPrefix}${logInstanceId}.err.log`);
 
+    const carryOver = readInstalledDaemonServiceEnvCarryOver({
+      platform: 'darwin',
+      installedDefinitionPath: plistPath,
+    });
+
     const env: Record<string, string> = {
-      PATH: buildLaunchdPath({ execPath: params.nodePath, homeDir: params.userHomeDir }),
+      PATH: carryOver.path ?? buildLaunchdPath({ execPath: params.nodePath, homeDir: params.userHomeDir }),
       ...baseEnv,
       ...pinnedTargetEnv,
+      ...carryOver.operatorOverrides,
     };
 
     const xml = buildLaunchAgentPlistXml({
@@ -371,6 +378,10 @@ export function planDaemonServiceInstall(params: Readonly<{
       env: {
         ...baseEnv,
         ...pinnedTargetEnv,
+        ...readInstalledDaemonServiceEnvCarryOver({
+          platform: 'win32',
+          installedDefinitionPath: wrapperPath,
+        }).operatorOverrides,
       },
       stdoutPath,
       stderrPath,
@@ -414,14 +425,21 @@ export function planDaemonServiceInstall(params: Readonly<{
     ? resolveSystemdSystemUnitPath({ instanceId, channel, targetMode })
     : resolveSystemdUserUnitPath({ userHomeDir: params.userHomeDir, instanceId, channel, targetMode });
 
+  const linuxCarryOver = readInstalledDaemonServiceEnvCarryOver({
+    platform: 'linux',
+    installedDefinitionPath: unitPath,
+  });
+
   const unit = renderSystemdServiceUnit({
     description: targetMode === 'default-following' ? 'Happier CLI daemon (default)' : `Happier CLI daemon (${instanceId})`,
     execStart: programArgs,
     workingDirectory: mode === 'system' ? params.userHomeDir : '%h',
     env: {
-      PATH: buildServicePath({ execPath: params.nodePath, homeDir: params.userHomeDir, platform: 'linux' }),
+      PATH: linuxCarryOver.path
+        ?? buildServicePath({ execPath: params.nodePath, homeDir: params.userHomeDir, platform: 'linux' }),
       ...baseEnv,
       ...pinnedTargetEnv,
+      ...linuxCarryOver.operatorOverrides,
     },
     killMode: 'process',
     managedOomPreference: 'avoid',

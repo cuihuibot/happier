@@ -7,9 +7,10 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { doesInstalledDaemonServiceDefinitionMatchExpected } from './doesInstalledDaemonServiceDefinitionMatchExpected';
 
 // Fixtures modelled on the actual plist shapes we produce for the
-// `com.happier.cli.daemon.default` default-following service. The key point
-// is that two definitions can *differ* in their `ProgramArguments` launcher
-// and `PATH` env var yet still launch the same daemon under the same config.
+// `com.happier.cli.daemon.default` default-following service. Two definitions
+// can differ in their `PATH` env var and still launch the same daemon, but a
+// differing `ProgramArguments` launcher pins a different CLI build: the shim
+// form follows the promoted `current` CLI while the node+entry form does not.
 
 const BOILERPLATE = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -107,25 +108,25 @@ describe('doesInstalledDaemonServiceDefinitionMatchExpected', () => {
     });
   });
 
-  it('returns true when ProgramArguments shape differs (shim vs node+entry) but env vars match', async () => {
+  it('returns false when the ProgramArguments launcher pins a different CLI build (shim vs node+entry)', async () => {
     await withTempDir('plist-signature-', async (dir) => {
       const installedPath = writePlistFile(dir, plist(PROGRAM_ARGS_NODE_ENTRY, PATH_A));
-      const expectedContents = plist(PROGRAM_ARGS_SHIM, PATH_B);
+      const expectedContents = plist(PROGRAM_ARGS_SHIM, PATH_A);
       expect(doesInstalledDaemonServiceDefinitionMatchExpected({
         installedPath,
         expectedContents,
-      })).toBe(true);
+      })).toBe(false);
     });
   });
 
-  it('returns true when BOTH PATH and ProgramArguments form drift together (the actual screenshot scenario)', async () => {
+  it('returns false for a pinned-entry drift even when only PATH also differs', async () => {
     await withTempDir('plist-signature-', async (dir) => {
       const installedPath = writePlistFile(dir, plist(PROGRAM_ARGS_NODE_ENTRY, PATH_A));
       const expectedContents = plist(PROGRAM_ARGS_SHIM, PATH_B);
       expect(doesInstalledDaemonServiceDefinitionMatchExpected({
         installedPath,
         expectedContents,
-      })).toBe(true);
+      })).toBe(false);
     });
   });
 
