@@ -9,17 +9,20 @@ repository; see [Repository boundary for custom deployments](repository-boundary
 
 ## Source status
 
-The current documentation candidate is based on the independently approved
-product commit `4a4574a84f387933c58992eb4b66b909e6b97a8c` (tree
+The current documentation candidate is based on the exact product commit
+`4a4574a84f387933c58992eb4b66b909e6b97a8c` (tree
 `930e923fcd0c041d4a9a612958d29b37cbb67864`) on
 `release/happier-0.2.12-cuihui-acp-perm-recheck-20260916`. It changes
 documentation only.
 
-That product candidate is not installed. The installed stack remains the prior
-approved `0.2.12-cuihui-acp-stall-v1`. This page therefore distinguishes the
-candidate behavior below from installed behavior and does not claim release,
-deployment, or documentation approval. Historical source and deployment
-records elsewhere on this page remain scoped to the candidates they name.
+On September 16, 2026, that product candidate and the official Happier desktop
+0.2.12 were deployed to a laptop-only canary. Quinann was not modified. Exact
+host inventory, installed artifact hashes and paths, acceptance records, and
+rollback commands remain in the operator-controlled deployment evidence rather
+than this public product repository. The deployment evidence is an engineering
+report, not independent product or documentation approval. Historical source
+and deployment records elsewhere on this page remain scoped to the candidates
+they name.
 
 ## Maintained behavior
 
@@ -199,12 +202,12 @@ evidence.
 
 ### ACP permission actionability and turn settlement
 
-The approved CLI-only candidate
+The exact CLI-only candidate
 `4a4574a84f387933c58992eb4b66b909e6b97a8c` repairs a turn that could remain in
 plain thinking after an ACP permission prompt stopped being answerable. It does
 not change the client, UI, ACP protocol, approval or denial decisions, replay,
-or persisted formats. It is not installed; the installed stack remains
-`0.2.12-cuihui-acp-stall-v1`.
+or persisted formats. It is installed only on the September 16 laptop canary;
+this is not a general release or a deployment to Quinann.
 
 The existing implicit response-completion stall budget remains 600 seconds and
 continues to bound provider silence, not total turn duration. While the caller
@@ -256,6 +259,54 @@ Independent product validation for the exact candidate passed the focused lane
 had one unrelated tmux prerequisite failure. These results establish the
 product candidate's validation basis; they do not approve this documentation
 candidate.
+
+#### Laptop canary observations
+
+The September 16 laptop canary exercised the installed 0.2.12 custom CLI
+through the public session entry point. The observed flow created a session,
+completed a marker turn, stopped and resumed the same session, then kept a real
+permission request actionable for more than 70 seconds without a false timeout.
+Cancelling the test session removed the pending request without executing the
+probed file operation. The pre-existing runner remained active throughout.
+
+The live validation changed two timestamp fields in
+`startup-overrides-cache.json`. The schema version, backend set,
+`permissionMode`, model selection, file mode, and size were unchanged. Treat
+this as a validation side effect, not byte-identical state. The operator
+evidence retains the pre-image for an exact restoration if separately
+authorized.
+
+#### Canary daemon service controls
+
+On macOS, `happier service restart` can refresh a drifted LaunchAgent from the
+current product template before restarting it. In this canary, that refresh
+replaced the launcher with an absolute JavaScript-runtime path plus an absolute
+versioned `package-dist` entry path. It also removed the manually added
+`HAPPIER_CLI_UPDATE_CHECK=0` guard and replaced the prior `PATH`. The operator
+restored the guard and original `PATH` and reloaded the service; the running
+daemon currently has both values.
+
+These controls are required while the canary remains on this service shape:
+
+1. Do not treat a `current` symlink update as a daemon promotion. The running
+   service is pinned to the versioned package path written into its
+   `ProgramArguments`; refresh the service definition for every future CLI
+   promotion.
+2. Treat every `happier service restart` as a configuration rewrite. After the
+   command, inspect the installed LaunchAgent and the new daemon process
+   environment before accepting the restart.
+3. If the update-check guard or the recorded pre-deployment `PATH` is missing,
+   restore both from the operator-controlled known-good record, reload the
+   LaunchAgent, and verify the live daemon environment. A plist edit without a
+   reload does not change the cached launchd definition.
+4. Preserve the prior desktop bundle, CLI version directory, pointer markers,
+   LaunchAgent, and startup-overrides pre-image until rollback is no longer
+   required. Use the exact operator-controlled rollback procedure; do not
+   reconstruct environment-specific paths or hashes from this page.
+
+The service refresh behavior and current guard are observed canary facts, not a
+durability guarantee. The next product-supported service restart can remove the
+manual guard and prior `PATH` again.
 
 ### Daemon spawn identity settlement
 
