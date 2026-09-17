@@ -3,6 +3,7 @@ import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
 
 export type ExecutionRunBackendStartContext = Readonly<{
+  profileId?: string | null;
   intentInput?: unknown;
   retentionPolicy?: string;
   intent?: string;

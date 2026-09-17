@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
-import { BackendTargetKeySchema } from '../backendTargets/backendTargetRef.js';
+import { BackendTargetKeySchema, BackendTargetRefSchema } from '../backendTargets/backendTargetRef.js';
+import { AcpConfigOptionOverridesV1Schema } from '../sessionMetadata/metadataOverridesV1.js';
+import { ConnectedServiceBindingsV1Schema } from '../connect/connectedServiceBindings.js';
 import { SecretStringV1Schema } from '../crypto/settingsSecretStringsV1.js';
 import { SESSION_PERMISSION_MODES } from '../sessionMetadata/sessionPermissionModes.js';
 import { CodingPromptBehaviorOverrideV1Schema } from '../prompts/codingPromptBehaviorV1.js';
@@ -65,6 +67,15 @@ export const AIBackendProfileSchema = z.object({
 
   // Default model mode for this profile.
   defaultModelMode: z.string().optional(),
+
+  executionRunDefaults: z.object({
+    backendTarget: BackendTargetRefSchema,
+    sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema,
+    connectedServices: ConnectedServiceBindingsV1Schema.optional(),
+    retentionPolicy: z.enum(['ephemeral', 'resumable']).optional(),
+    runClass: z.enum(['bounded', 'long_lived']).optional(),
+    ioMode: z.enum(['request_response', 'streaming']).optional(),
+  }).strict().optional(),
 
   // Canonical compatibility metadata.
   compatibilityByTargetKey: ProfileCompatibilityByTargetKeySchema.default({}),

@@ -15,6 +15,7 @@ export const CodingPromptBehaviorV1Schema = z
     v: z.literal(1).default(1),
     sessionTitleUpdates: CodingPromptSessionTitleUpdatesInputV1Schema.default('ongoing'),
     responseOptions: CodingPromptBehaviorModeV1Schema.default('agent'),
+    delegationRouting: z.enum(['native', 'happier']).optional(),
   })
   .catch({
     v: 1,
@@ -52,6 +53,7 @@ export const CodingPromptBehaviorOverrideV1Schema = z.object({
   v: z.literal(1).default(1),
   sessionTitleUpdates: CodingPromptSessionTitleUpdatesInputV1Schema.optional(),
   responseOptions: CodingPromptBehaviorModeV1Schema.optional(),
+  delegationRouting: z.enum(['native', 'happier']).optional(),
 }).catch({ v: 1 });
 
 export type CodingPromptBehaviorOverrideV1 = z.infer<typeof CodingPromptBehaviorOverrideV1Schema>;
@@ -75,6 +77,9 @@ export function resolveCodingPromptBehaviorV1WithOverride(params: {
     v: global.v,
     sessionTitleUpdates: (overrideObj?.sessionTitleUpdates ?? global.sessionTitleUpdates) as CodingPromptSessionTitleUpdatesModeV1,
     responseOptions: (overrideObj?.responseOptions ?? global.responseOptions) as CodingPromptBehaviorModeV1,
+    ...((params.override.delegationRouting ?? global.delegationRouting) !== undefined
+      ? { delegationRouting: params.override.delegationRouting ?? global.delegationRouting }
+      : {}),
   };
 }
 

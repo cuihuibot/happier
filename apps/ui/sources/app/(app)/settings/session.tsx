@@ -94,6 +94,9 @@ export default React.memo(function SessionSettingsScreen() {
                 ? { sessionTitleUpdates: raw.sessionTitleUpdates }
                 : {}),
             ...(raw.responseOptions === 'disabled' ? { responseOptions: 'disabled' as const } : {}),
+            ...(raw.delegationRouting === 'native' || raw.delegationRouting === 'happier'
+                ? { delegationRouting: raw.delegationRouting }
+                : {}),
         };
     }, [codingPromptBehavior]);
     const titleUpdatesModeItems = React.useMemo(getCodingPromptTitleUpdatesModeItems, []);

@@ -415,6 +415,26 @@ export function isExecutionRunTerminalStatus(status: unknown): status is Executi
 export async function startExecutionRun(
     params: ExecutionRunRpcContext & Readonly<{ request: unknown }>,
 ): Promise<ExecutionRunServiceResult<unknown>> {
+    if (isRecord(params.request) && typeof params.request.profileId === 'string' && params.request.intent !== 'voice_agent') {
+        try {
+            // Query the live host directly: marker/history fallback cannot prove protocol support.
+            const capabilities = await callExecutionRunRpc({
+                ...params, methodSuffix: SESSION_RPC_METHODS.EXECUTION_RUN_LIST, request: { limit: 1 },
+            });
+            if (!capabilities.ok) return capabilities;
+            const parsed = ExecutionRunListResponseSchema.safeParse(capabilities.data);
+            if (!parsed.success || parsed.data.nativeWorkerProfiles !== true) {
+                return {
+                    ok: false, code: 'execution_run_protocol_unsupported',
+                    message: 'Parent runtime cannot guarantee native worker selection; start a fresh parent with a compatible Happier build',
+                };
+            }
+        } catch (error) {
+            const code = classifyExecutionRunRpcFallback(error);
+            if (!code) throw error;
+            return toExecutionRunFallbackExhaustedError(error, code);
+        }
+    }
     try {
         const result = await callExecutionRunRpc({
             ...params,
@@ -659,6 +679,19 @@ export async function waitForExecutionRun(
             pollIntervalMs: number;
         }>,
 ): Promise<WaitForExecutionRunResult> {
+    return await waitForExecutionRunWithGet(params, async (request) => await getExecutionRun({
+        token: params.token,
+        sessionId: params.sessionId,
+        mode: params.mode,
+        ctx: params.ctx,
+        request,
+    }));
+}
+
+export async function waitForExecutionRunWithGet(
+    params: Readonly<{ runId: string; timeoutMs: number | null; pollIntervalMs: number }>,
+    getRun: (request: Readonly<{ runId: string }>) => Promise<ExecutionRunServiceResult<unknown>>,
+): Promise<WaitForExecutionRunResult> {
     const request = ExecutionRunGetRequestSchema.parse({ runId: params.runId });
     const timeoutMs =
         typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
@@ -668,13 +701,7 @@ export async function waitForExecutionRun(
     const deadlineMs = timeoutMs === null ? null : Date.now() + timeoutMs;
 
     while (deadlineMs === null || Date.now() <= deadlineMs) {
-        const result = await getExecutionRun({
-            token: params.token,
-            sessionId: params.sessionId,
-            mode: params.mode,
-            ctx: params.ctx,
-            request,
-        });
+        const result = await getRun(request);
         if (!result.ok) {
             return result;
         }

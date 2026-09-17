@@ -5,6 +5,7 @@ import {
 
 import type { AgentBackend, SessionId, StartSessionResult } from '@/agent/core/AgentBackend';
 import { readNonBlankSessionControlIdentifier } from '@/agent/runtime/sessionControlIdentifiers';
+import { SessionControlApplyError } from '@/agent/runtime/sessionControlApplyError';
 
 /**
  * Canonical, provider-agnostic apply-options seam for execution-run backends.
@@ -16,8 +17,8 @@ import { readNonBlankSessionControlIdentifier } from '@/agent/runtime/sessionCon
  *
  * It is capability-driven, not provider-name-driven: options are applied only when the backend
  * exposes the corresponding setter (`setSessionModel` / `setSessionConfigOption`). Backends that
- * cannot apply an option (e.g. the Codex MCP transport, which bakes the model in at construction)
- * are returned untouched — the wrapper is a no-op rather than a hard failure.
+ * apply models at construction keep that behavior. Required config options fail closed when
+ * their setter is absent.
  */
 
 type ModelConfigurableBackend = AgentBackend &
@@ -52,6 +53,9 @@ export function withExecutionRunBackendModelOptions(
   const target = backend as ModelConfigurableBackend;
 
   const applyOptions = async (sessionId: SessionId): Promise<void> => {
+    if (overrideEntries.length > 0 && typeof target.setSessionConfigOption !== 'function') {
+      throw SessionControlApplyError.definitive(new Error('Backend cannot apply required config options'));
+    }
     if (modelId && typeof target.setSessionModel === 'function') {
       await target.setSessionModel(sessionId, modelId);
     }

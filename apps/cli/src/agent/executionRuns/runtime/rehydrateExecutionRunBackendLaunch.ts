@@ -1,6 +1,7 @@
 import type { AcpConfigOptionOverridesV1, BackendTargetRefV1, ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
 
 import type { ExecutionRunState } from '@/agent/executionRuns/runtime/executionRunTypes';
+import { prepareExecutionRunProfileEnv } from './prepareExecutionRunProfileEnv';
 import {
   ExecutionRunConnectedServicesUnavailableError,
   type PreparedExecutionRunConnectedServices,
@@ -62,6 +63,11 @@ export async function resolveExecutionRunResumeBackendOptions(args: Readonly<{
 
   if (launch?.modelId) options.modelId = launch.modelId;
   if (launch?.sessionConfigOptionOverrides) options.sessionConfigOptionOverrides = launch.sessionConfigOptionOverrides;
+  if (launch?.profileId) {
+    options.connectedServicesEnv = await prepareExecutionRunProfileEnv({
+      profileId: launch.profileId, backendTarget: args.run.backendTarget, accountSettings,
+    });
+  }
 
   const selection = launch?.connectedServicesSelection ?? null;
   if (selectionHasConnectedBinding(selection)) {
@@ -80,7 +86,7 @@ export async function resolveExecutionRunResumeBackendOptions(args: Readonly<{
       // fail closed rather than recreate on the wrong (inherited) account.
       throw new ExecutionRunConnectedServicesUnavailableError({ agentId });
     }
-    options.connectedServicesEnv = prepared.env;
+    options.connectedServicesEnv = { ...options.connectedServicesEnv, ...prepared.env };
     options.connectedServicesCleanup = prepared.cleanup;
   }
 

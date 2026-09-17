@@ -27,6 +27,7 @@ export type ProbedAgentConfigOptionsResult = Readonly<{
   provider: CatalogAgentId;
   configOptions: ReadonlyArray<ProbedAgentConfigOption>;
   source: 'dynamic' | 'static';
+  status?: 'unsupported' | 'failed';
 }>;
 
 const PROBE_CONFIG_OPTIONS_SUCCESS_TTL_MS = 24 * 60 * 60_000;
@@ -141,9 +142,15 @@ export async function probeAgentConfigOptionsBestEffort(params: {
     const fallback = buildStatic(params.agentId);
     const entry = AGENTS[params.agentId];
 
-    const preflightAdapter = entry?.getPreflightSessionControlsProbeAdapter
-      ? await entry.getPreflightSessionControlsProbeAdapter().catch(() => null)
-      : null;
+    const failed: ProbedAgentConfigOptionsResult = { ...fallback, status: 'failed' };
+    let preflightAdapter;
+    try {
+      preflightAdapter = entry?.getPreflightSessionControlsProbeAdapter
+        ? await entry.getPreflightSessionControlsProbeAdapter() : null;
+    } catch {
+      agentConfigOptionsProbeCache.setSuccess(cacheKey, failed, { nowMs: nowMs2, ttlMs: PROBE_CONFIG_OPTIONS_FAILURE_TTL_MS });
+      return failed;
+    }
     if (preflightAdapter?.probeConfigOptionsRaw) {
       const timeoutMs = typeof params.timeoutMs === 'number' ? params.timeoutMs : 15_000;
 
@@ -176,17 +183,18 @@ export async function probeAgentConfigOptionsBestEffort(params: {
         // For providers where this probe is the primary/authoritative source, cache an error so
         // subsequent calls retry instead of freezing the static fallback.
         agentConfigOptionsProbeCache.setError(cacheKey, { nowMs: nowMs2, ttlMs: PROBE_CONFIG_OPTIONS_FAILURE_TTL_MS });
-        return fallback;
+        return failed;
       }
 
       // The dynamic probe ran but returned invalid/unparseable data. Never cache that outcome as a
       // 24h "success" fallback; use the short failure TTL so we can recover quickly without
       // re-running the probe on every request.
-      agentConfigOptionsProbeCache.setSuccess(cacheKey, fallback, { nowMs: nowMs2, ttlMs: PROBE_CONFIG_OPTIONS_FAILURE_TTL_MS });
-      return fallback;
+      agentConfigOptionsProbeCache.setSuccess(cacheKey, failed, { nowMs: nowMs2, ttlMs: PROBE_CONFIG_OPTIONS_FAILURE_TTL_MS });
+      return failed;
     }
 
-    agentConfigOptionsProbeCache.setSuccess(cacheKey, fallback, { nowMs: nowMs2, ttlMs: PROBE_CONFIG_OPTIONS_SUCCESS_TTL_MS });
-    return fallback;
+    const unsupported: ProbedAgentConfigOptionsResult = { ...fallback, status: 'unsupported' };
+    agentConfigOptionsProbeCache.setSuccess(cacheKey, unsupported, { nowMs: nowMs2, ttlMs: PROBE_CONFIG_OPTIONS_SUCCESS_TTL_MS });
+    return unsupported;
   });
 }

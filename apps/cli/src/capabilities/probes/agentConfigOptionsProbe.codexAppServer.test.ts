@@ -19,6 +19,10 @@ vi.mock('@/backends/codex/appServer/sessionControlsMetadata', () => ({
 import { probeAgentConfigOptionsBestEffort } from './agentConfigOptionsProbe';
 
 describe('probeAgentConfigOptionsBestEffort (codex app-server)', () => {
+  it('distinguishes a missing non-inference probe adapter from an empty discovered catalog', async () => {
+    expect(await probeAgentConfigOptionsBestEffort({ agentId: 'auggie', cwd: '/h8-no-probe' }))
+      .toMatchObject({ source: 'static', status: 'unsupported', configOptions: [] });
+  });
   beforeEach(() => {
     withCodexAppServerClientMock.mockReset();
     readCodexAppServerSessionControlsMock.mockReset();
@@ -212,6 +216,7 @@ describe('probeAgentConfigOptionsBestEffort (codex app-server)', () => {
       provider: 'codex',
       configOptions: [],
       source: 'static',
+      status: 'failed',
     });
 
     readCodexAppServerSessionControlsMock.mockResolvedValueOnce({

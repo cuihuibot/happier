@@ -420,6 +420,8 @@ function getString(obj: Record<string, unknown>, key: string): string | null {
 }
 
 function normalizeConfigOptionValueId(value: unknown): string | boolean | null {
+  // ACP permits the empty-string choice used by Copilot for its default agent.
+  if (value === '') return '';
   return readSessionControlValueId(value);
 }
 
@@ -2433,6 +2435,7 @@ export class AcpBackend implements AgentBackend {
     sessionId: SessionId,
     configId: string,
     valueId: string | number | boolean | null,
+    selection?: Readonly<{ requireAcknowledgement: boolean }>,
   ): Promise<void> {
     if (this.disposed) {
       throw new Error('Backend has been disposed');
@@ -2507,6 +2510,15 @@ export class AcpBackend implements AgentBackend {
 
     const configOptionsCandidate = response?.configOptions;
     const configOptionsRaw = Array.isArray(configOptionsCandidate) ? configOptionsCandidate : null;
+    if (selection?.requireAcknowledgement) {
+      const acknowledged = configOptionsRaw ? normalizeSessionConfigOptions(configOptionsRaw) : [];
+      if (!acknowledged.some((option) => option.id === normalizedConfigId && option.currentValue === normalizedValueId)) {
+        throw SessionControlApplyError.definitive(new Error(`Provider did not acknowledge required config option "${normalizedConfigId}"`));
+      }
+      this.sessionConfigOptionsState = acknowledged;
+      this.emit({ type: 'event', name: 'config_options_update', payload: { configOptions: acknowledged } });
+      return;
+    }
     if (configOptionsRaw) {
       const next = normalizeSessionConfigOptions(configOptionsRaw);
       this.sessionConfigOptionsState = next.map((option) =>

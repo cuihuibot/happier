@@ -666,9 +666,12 @@ export function ProfileEditForm({
             defaultPersistenceModeByAgent: {},
             compatibilityByTargetKey,
             compatibility: {},
-            codingPromptBehaviorV1: sessionTitleUpdatesOverride || responseOptionsOverride
+            codingPromptBehaviorV1: sessionTitleUpdatesOverride || responseOptionsOverride || profileBase.codingPromptBehaviorV1?.delegationRouting
                 ? {
                     v: 1,
+                    ...(profileBase.codingPromptBehaviorV1?.delegationRouting
+                        ? { delegationRouting: profileBase.codingPromptBehaviorV1.delegationRouting }
+                        : {}),
                     ...(sessionTitleUpdatesOverride ? { sessionTitleUpdates: sessionTitleUpdatesOverride } : {}),
                     ...(responseOptionsOverride ? { responseOptions: responseOptionsOverride } : {}),
                 }

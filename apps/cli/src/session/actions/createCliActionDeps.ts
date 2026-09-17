@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 import {
+  AIBackendProfileSchema,
   buildBackendTargetKey,
   getActionSpec,
   listNativeReviewEngines,
@@ -1183,6 +1184,11 @@ export function createCliActionDeps(params: Readonly<{
   };
 
   return {
+    executionRunProfilesRead: async () => {
+      if (!params.credentials) throw new Error('Not authenticated');
+      const settings = await readActionAccountSettings();
+      return AIBackendProfileSchema.array().parse(settings.profiles ?? []);
+    },
     executionRunStart: async (sessionId, request) => {
       const permissionDenied = await denyPermissionEscalationForRequestedMode(request.permissionMode);
       if (permissionDenied) return permissionDenied;
