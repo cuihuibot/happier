@@ -194,6 +194,22 @@ The CLI encrypts client content before it leaves the machine using `src/api/encr
 - Session metadata, agent state, messages, machine state, artifacts, and KV values are encrypted client-side.
 - On-wire encoding is base64; see `encryption.md`.
 
+## ACP prompt settlement ownership
+
+The shared ACP runtime captures the originating runtime turn ID before starting
+asynchronous prompt submission or context compaction. After each asynchronous
+boundary, it checks that ownership before publishing acceptance, recording an
+outcome, or classifying an error. A superseded dispatch terminates as an explicit
+cancellation; it cannot use the replacement turn's reset abort flag to publish a
+provider failure or overwrite that turn's completion state. Current-turn provider
+rejections and genuine failures keep their existing classification.
+
+This runtime guard complements the ACP backend's provider-generation checks; it
+does not turn transport liveness into acceptance, change wire formats, or make
+interrupt-and-replace steering non-interrupting. Regression coverage lives in
+`createAcpRuntime.providerInputAcceptance.test.ts`, alongside the current-turn
+failure controls in `createAcpRuntime.statusErrorSurface.test.ts`.
+
 ## Daemon architecture
 
 ```mermaid
