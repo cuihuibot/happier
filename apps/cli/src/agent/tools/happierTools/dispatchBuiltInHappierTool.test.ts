@@ -650,7 +650,62 @@ describe('built-in Happier tools', () => {
     });
   });
 
-  it('routes voice_agent execution_run_start through the shared action tool executor', async () => {
+  it.each(['delegate', 'review'])('resolves a profile-only %s start through the canonical action instead of requiring a backend', async (intent) => {
+    const result = await dispatchBuiltInHappierTool({
+      toolName: 'execution_run_start',
+      args: { intent, profileId: 'saved-worker', instructions: 'Return the marker.', modelId: 'selected-model' },
+      sessionId: 'sess-1',
+      surface: 'mcp',
+      deps: {
+        changeTitle: async () => ({ success: true }),
+        startExecutionRun: async () => unsupported(),
+        executeActionByToolName: async (toolName, args) => ok({ toolName, args }),
+      },
+    });
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        toolName: 'execution_run_start',
+        args: { intent, profileId: 'saved-worker', instructions: 'Return the marker.', modelId: 'selected-model', sessionId: 'sess-1' },
+      },
+    });
+  });
+
+  it('rejects cross-session profile launches without dispatching', async () => {
+    const startExecutionRun = vi.fn(async () => ok({ launched: true }));
+    const executeActionByToolName = vi.fn(async () => ok({ launched: true }));
+    const result = await dispatchBuiltInHappierTool({
+      toolName: 'execution_run_start',
+      args: { sessionId: 'sess-2', intent: 'delegate', profileId: 'saved-worker', instructions: 'Task.' },
+      sessionId: 'sess-1',
+      surface: 'mcp',
+      deps: {
+        changeTitle: async () => ({ success: true }),
+        startExecutionRun,
+        executeActionByToolName,
+      },
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
+    expect(startExecutionRun).not.toHaveBeenCalled();
+    expect(executeActionByToolName).not.toHaveBeenCalled();
+  });
+
+  it.each([42, '', {}])('rejects malformed profile %j rather than falling back to a backend-only start', async (profileId) => {
+    const result = await dispatchBuiltInHappierTool({
+      toolName: 'execution_run_start',
+      args: { intent: 'delegate', profileId, backendTarget: { kind: 'builtInAgent', agentId: 'copilot' }, instructions: 'Task.' },
+      sessionId: 'sess-1',
+      surface: 'mcp',
+      deps: {
+        changeTitle: async () => ({ success: true }),
+        startExecutionRun: async () => ok({ launched: true }),
+        executeActionByToolName: async () => ok({ launched: true }),
+      },
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_action_input' });
+  });
+
+  it.each([undefined, 'unused-profile'])('preserves the voice_agent action route with profile %s', async (profileId) => {
     const startExecutionRun = vi.fn(async (_sessionId: string, request: unknown) => ok(request));
     const executeActionByToolName = vi.fn(
       async (toolName: string, args: unknown, defaultSessionId: string): Promise<HappierBuiltInToolDispatchResult> =>
@@ -661,6 +716,7 @@ describe('built-in Happier tools', () => {
       toolName: 'execution_run_start',
       args: {
         intent: 'voice_agent',
+        ...(profileId ? { profileId } : {}),
         backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
         instructions: 'Start voice agent.',
       },

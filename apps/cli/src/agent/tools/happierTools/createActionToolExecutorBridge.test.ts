@@ -4,6 +4,22 @@ import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
 
 describe('createActionToolExecutorBridge', () => {
+  it('preserves permission-denial details returned by execution-run action dependencies', async () => {
+    const denied = {
+      ok: false as const,
+      errorCode: 'permission_escalation_denied',
+      error: 'permission_escalation_denied',
+      details: { callerMode: 'read-only', requestedMode: 'safe-yolo' },
+    };
+    const bridge = createActionToolExecutorBridge({
+      surface: 'cli',
+      executor: { execute: async () => ({ ok: true, result: denied }) },
+    });
+    expect(await bridge.executeActionByToolName('execution_run_start', {
+      intent: 'delegate', profileId: 'worker', permissionMode: 'workspace_write',
+    }, 'parent')).toEqual(denied);
+  });
+
   it('passes approval origin metadata through to action executor context', async () => {
     const calls: unknown[] = [];
     const actionsSettings = ActionsSettingsV1Schema.parse({

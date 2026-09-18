@@ -63,8 +63,10 @@ export function finishExecutionRun(args: Readonly<{
     return existing.resumeHandle ?? null;
   })();
 
+  const controller = args.controllers.get(args.runId);
   const updated: ExecutionRunState = {
     ...existing,
+    ...(controller?.kind === 'backend' ? { turnCount: controller.turnCount } : {}),
     status: args.next.status,
     summary: args.next.summary ?? existing.summary,
     finishedAtMs: args.next.finishedAtMs,

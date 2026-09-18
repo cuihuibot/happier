@@ -458,12 +458,33 @@ connected selection. Resume rehydrates environment/account references without
 reapplying an edited mapping. Public state separates `requestedModelId` from
 provider-acknowledged `nativeSelection`; absent acknowledgment remains unverified.
 
+Profile-based `execution_run_start` tool calls use the canonical action input and
+profile resolver, including when the backend is supplied by the saved profile.
+Malformed profile input is rejected rather than retried as a backend-only start.
+This returns the canonical single-run result; preferred delegation keeps its
+fan-out result shape. Voice starts keep their existing dedicated action route.
+Bounded resume uses the bounded completion pipeline: each completed follow-up
+publishes a new structured result and terminal state while retaining the vendor
+session. Completion/disposal rejects overlapping resume requests as busy, and
+turn limits remain cumulative even after explicit rehydration. Long-lived turns
+remain nonterminal and deliver output to the sidechain.
+Per-run bounded timeout overrides are retained across resume. A resume rejected
+as `execution_run_busy` during prior-turn teardown can be retried after cleanup.
+Reattaching a session refreshes its CLI version from the new process while
+preserving its workspace identity and permission intent.
+
 `codingPromptBehaviorV1.delegationRouting` is the sole saved route owner.
 Account native is the effective default; a parent override can be absent.
 The existing session prompt merge and first-turn runtime delivery consume one
 resolved block. Guidance-off and feature-off preserve their existing behavior.
 Only fresh parents receive changed guidance. Current user instructions and enforced
 permissions remain above the preference.
+
+A `subagents.delegate.start` or `subagents.plan.start` request must provide either
+`profileId` or a nonempty `backendTargetKeys` selection. Low-level
+`execution.run.start` uses `backendTarget` instead of `backendTargetKeys`.
+The saved routing preference chooses the execution
+route; it does not by itself select a backend or specialist.
 
 Session-scoped MCP waits use the session execution-run service when supplied.
 The local-RPC adapter otherwise reuses the same wait algorithm over
