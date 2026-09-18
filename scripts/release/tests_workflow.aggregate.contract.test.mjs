@@ -31,7 +31,7 @@ test('selected owner jobs collect every independent diagnostic before failing', 
   const workflow = YAML.parse(raw);
 
   const expectedChecks = {
-    cli: ['unit-tests', 'cli-common-dist', 'integration-tests'],
+    cli: ['unit-tests', 'copilot-steering', 'cli-common-dist', 'integration-tests'],
     'release-contracts': ['release-contracts', 'release-sync-installers'],
     typecheck: [
       'wiring-self',

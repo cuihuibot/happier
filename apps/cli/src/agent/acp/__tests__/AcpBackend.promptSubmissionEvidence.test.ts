@@ -156,6 +156,65 @@ describe('AcpBackend prompt submission evidence', () => {
     }
   });
 
+  it.each(['current', 'next'] as const)('isolates a steering rejection from the %s turn correctly', async (target) => {
+    const backend = createBackend();
+    let finishFirst!: (response: PromptResponse) => void;
+    let finishNext!: (response: PromptResponse) => void;
+    let rejectSteer!: (error: Error) => void;
+    const first = new Promise<PromptResponse>((resolve) => { finishFirst = resolve; });
+    const steer = new Promise<PromptResponse>((_resolve, reject) => { rejectSteer = reject; });
+    const next = new Promise<PromptResponse>((resolve) => { finishNext = resolve; });
+    const responses = [first, steer, next];
+    let calls = 0;
+    const internals = backend as unknown as {
+      observeAcpTransportMessageWritten(message: unknown): void;
+    };
+    installPromptPeer(backend, () => {
+      const response = responses[calls++];
+      internals.observeAcpTransportMessageWritten({
+        jsonrpc: '2.0',
+        id: calls,
+        method: 'session/prompt',
+        params: { sessionId: 'test-session', prompt: [] },
+      });
+      return response;
+    });
+    const onMessage = vi.fn();
+    backend.onMessage(onMessage);
+
+    try {
+      await backend.sendPromptWithEvidence('test-session', 'first');
+      const steering = await backend.sendSteerPromptWithEvidence('test-session', 'steer');
+      if (steering.kind !== 'effect_may_have_occurred') {
+        throw new Error('Expected outstanding steering response evidence');
+      }
+      if (target === 'next') {
+        finishFirst({ stopReason: 'end_turn' });
+        await backend.waitForResponseComplete(250);
+        await backend.sendPromptWithEvidence('test-session', 'next');
+      }
+      const completion = backend.waitForResponseComplete(250);
+      void completion.catch(() => {});
+      onMessage.mockClear();
+      rejectSteer(new Error('delayed steering rejection'));
+      await expect(steering.finalResponseEvidence).rejects.toThrow('delayed steering rejection');
+
+      if (target === 'current') {
+        await expect(completion).rejects.toThrow('delayed steering rejection');
+        expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'status', status: 'error' }));
+      } else {
+        expect(await readPromiseState(completion)).toBe('pending');
+        expect(onMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'status', status: 'error' }));
+        finishNext({ stopReason: 'end_turn' });
+        await completion;
+      }
+    } finally {
+      finishFirst({ stopReason: 'end_turn' });
+      finishNext({ stopReason: 'end_turn' });
+      await backend.dispose();
+    }
+  });
+
   it('delegates in-flight steer to the provider extension adapter instead of issuing a second session prompt', async () => {
     const prompt = vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' }));
     const requestExtension = vi.fn(async () => ({ status: 'queued' }));
