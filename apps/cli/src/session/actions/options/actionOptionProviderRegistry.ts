@@ -289,6 +289,7 @@ export function createCliActionOptionProviderRegistry(
         ...(context.backendTargetKey ? { backendTargetKey: context.backendTargetKey } : {}),
         items: withLimit(items, args.limit),
         source: probed.source,
+        ...(probed.status ? { status: probed.status } : {}),
       };
     },
 

@@ -18,11 +18,12 @@ afterEach(() => {
 });
 
 describe('Session settings (prompt personalization)', () => {
-    it('renders prompt personalization controls in the agent personalization group', async () => {
+    it.each([undefined, 'native', 'happier'] as const)('preserves saved routing %s when editing title behavior', async (delegationRouting) => {
         sessionSettingsEntryState.settingsState.codingPromptBehaviorV1 = {
             v: 1,
             sessionTitleUpdates: 'ongoing',
             responseOptions: 'agent',
+            ...(delegationRouting ? { delegationRouting } : {}),
         };
 
         const mod = await import('@/app/(app)/settings/session');
@@ -46,6 +47,7 @@ describe('Session settings (prompt personalization)', () => {
             v: 1,
             sessionTitleUpdates: 'initial',
             responseOptions: 'agent',
+            ...(delegationRouting ? { delegationRouting } : {}),
         });
     });
 });

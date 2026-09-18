@@ -5,6 +5,9 @@ import type { AgentCatalogEntry } from '../types';
 
 export const agent = {
   id: AGENTS_CORE.copilot.id,
+  executionRunNativeAgentConfigOptionId: 'agent',
+  getPreflightSessionControlsProbeAdapter: async () =>
+    (await import('./acp/copilotPreflightSessionControlsProbeAdapter')).copilotPreflightSessionControlsProbeAdapter,
   cliSubcommand: AGENTS_CORE.copilot.cliSubcommand,
   getCliCommandHandler: async () => (await import('@/backends/copilot/cli/command')).handleCopilotCliCommand,
   getCliCapabilityOverride: async () => (await import('@/backends/copilot/cli/capability')).cliCapability,

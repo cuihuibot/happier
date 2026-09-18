@@ -61,7 +61,7 @@ function buildProfile(overrides: Record<string, unknown> = {}): AIBackendProfile
 }
 
 describe('ProfileEditForm coding prompt behavior', () => {
-    it('persists sparse profile overrides and removes them when both controls inherit the Account setting', async () => {
+    it.each([undefined, 'native', 'happier'] as const)('preserves routing %s through unrelated edits and save/reload', async (delegationRouting) => {
         const saveRef = { current: null as null | (() => boolean) };
         const onSave = vi.fn<ProfileEditFormProps['onSave']>(() => true);
         const screen = await renderScreen(React.createElement(ProfileEditForm, {
@@ -70,6 +70,7 @@ describe('ProfileEditForm coding prompt behavior', () => {
                     v: 1,
                     sessionTitleUpdates: 'initial',
                     responseOptions: 'disabled',
+                    ...(delegationRouting ? { delegationRouting } : {}),
                 },
             }),
             machineId: null,
@@ -103,7 +104,8 @@ describe('ProfileEditForm coding prompt behavior', () => {
             responseDropdown?.props.onSelect('__account__');
         });
         expect(saveRef.current?.()).toBe(true);
-        expect(onSave.mock.calls.at(-1)?.[0].codingPromptBehaviorV1).toBeUndefined();
+        expect(AIBackendProfileSchema.parse(onSave.mock.calls.at(-1)?.[0]).codingPromptBehaviorV1)
+            .toEqual(delegationRouting ? { v: 1, delegationRouting } : undefined);
 
         const updatedDropdowns = screen.findAllByType('DropdownMenu' as never);
         const updatedTitleDropdown = updatedDropdowns.find((node) =>
@@ -119,6 +121,7 @@ describe('ProfileEditForm coding prompt behavior', () => {
             v: 1,
             sessionTitleUpdates: 'ongoing',
             responseOptions: 'agent',
+            ...(delegationRouting ? { delegationRouting } : {}),
         });
     });
 });

@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 
 import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
 import type { Metadata } from '@/api/types';
@@ -8,7 +9,8 @@ import { registerHappierMcpResources } from '@/mcp/resources/registerHappierMcpR
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createChangeTitleToolHandler } from '@/agent/tools/happierTools/createChangeTitleToolHandler';
 import { createStartExecutionRunToolHandler } from '@/agent/tools/happierTools/createStartExecutionRunToolHandler';
-import { normalizeExecutionRunRpcPayload } from '@/session/services/executionRuns';
+import { normalizeExecutionRunRpcPayload, waitForExecutionRunWithGet } from '@/session/services/executionRuns';
+import { normalizeExecutionRunWaitPollIntervalMs, normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
 import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
 import type { Credentials } from '@/persistence';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
@@ -125,10 +127,17 @@ export function createHappierMcpServer(
       normalizeExecutionRunRpcPayload(
         await (client.executionRuns?.action?.(request) ?? sessionScopedRpc('execution.run.action', request)),
       ),
-    wait: async (request: unknown) =>
-      normalizeExecutionRunRpcPayload(
-        await (client.executionRuns?.wait?.(request) ?? sessionScopedRpc('execution.run.wait', request)),
-      ),
+    wait: async (request: unknown) => {
+      if (client.executionRuns?.wait) {
+        return normalizeExecutionRunRpcPayload(await client.executionRuns.wait(request));
+      }
+      const input = z.record(z.string(), z.unknown()).parse(getActionSpec('execution.run.wait').inputSchema.parse(request));
+      return await waitForExecutionRunWithGet({
+        runId: z.string().parse(input.runId),
+        timeoutMs: normalizeExecutionRunWaitTimeoutMs(input.timeoutSeconds),
+        pollIntervalMs: normalizeExecutionRunWaitPollIntervalMs(input.pollIntervalMs),
+      }, executionRuns.get);
+    },
   };
   const runForSession = async (
     sessionId: string,

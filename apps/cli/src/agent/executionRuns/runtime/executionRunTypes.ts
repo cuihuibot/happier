@@ -2,6 +2,7 @@ import type { AcpConfigOptionOverridesV1, BackendTargetRefV1, ConnectedServiceBi
 
 import type { ExecutionRunStructuredMeta } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import type { ExecutionRunConnectedServiceRegistrationV1 } from '@/daemon/connectedServices/runsBridge/contract';
+import type { ExecutionRunPublicState } from '@happier-dev/protocol';
 
 export type ExecutionRunManagerStartParams = Readonly<{
   sessionId: string;
@@ -78,6 +79,7 @@ export type ExecutionRunStartResult = Readonly<{
 
 export type ExecutionRunState = Readonly<{
   runId: string;
+  nativeSelection?: ExecutionRunPublicState['nativeSelection'];
   callId: string;
   sidechainId: string;
   sessionId: string;
@@ -108,6 +110,7 @@ export type ExecutionRunState = Readonly<{
    * re-resolvable inputs — NEVER raw credentials, materialized env values, or closures.
    */
   launch?: Readonly<{
+    profileId?: string;
     launchOrigin?: ExecutionRunLaunchOrigin;
     modelId?: string;
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1;

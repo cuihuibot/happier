@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
-import { FeaturesResponseSchema, type ExecutionRunPublicState, type ExecutionRunStartResponse } from '@happier-dev/protocol';
+import { AIBackendProfileSchema, FeaturesResponseSchema, type ExecutionRunPublicState, type ExecutionRunStartResponse } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import type {
@@ -316,6 +316,57 @@ function createCancelRaceBackend(params: Readonly<{
 }
 
 describe('executionRuns session RPC handlers', () => {
+  it('resolves a saved native worker name at the encrypted host boundary before applying defaults', async () => {
+    const { readCredentials } = await import('@/persistence');
+    vi.mocked(readCredentials).mockResolvedValue({ token: 'fixture', encryption: { type: 'legacy', secret: new Uint8Array(32) } });
+    const createBackend = vi.fn(() => createStaticBackend('ok'));
+    const profile = AIBackendProfileSchema.parse({
+      id: 'reader', name: 'Saved reader',
+      environmentVariables: [{ name: 'H8_WORKER_ENV', value: 'worker-only' }],
+      executionRunDefaults: {
+        backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+        sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: { agent: { value: 'reader', updatedAt: 1 } } },
+        retentionPolicy: 'resumable', runClass: 'bounded', ioMode: 'request_response',
+      },
+      defaultPermissionMode: 'read-only',
+    });
+    const client = createEncryptedRpcTestClient({
+      scopePrefix: 'sess_1',
+      registerHandlers: (rpc) => registerExecutionRunHandlers(rpc, {
+        sessionId: 'sess_1', cwd: process.cwd(), parentProvider: 'copilot',
+        createBackend, sendAcp: () => {}, resolveAccountSettings: async () => ({ profiles: [profile] }),
+      }),
+    });
+    const result = await client.call<ExecutionRunStartResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+      intent: 'delegate', profileId: 'Saved reader', instructions: 'Read only.',
+    });
+    expect(result.runId).toMatch(/^run_/);
+    expect(createBackend).toHaveBeenCalledWith(expect.objectContaining({
+      backendId: 'copilot', permissionMode: 'read_only',
+      start: expect.objectContaining({ profileId: 'reader', retentionPolicy: 'resumable' }),
+      sessionConfigOptionOverrides: profile.executionRunDefaults?.sessionConfigOptionOverrides,
+      connectedServicesEnv: { H8_WORKER_ENV: 'worker-only' },
+    }));
+    expect(process.env.H8_WORKER_ENV).toBeUndefined();
+  });
+
+  it('rejects a missing worker profile at the host instead of launching a generic agent', async () => {
+    const createBackend = vi.fn(() => createStaticBackend('ok'));
+    const client = createEncryptedRpcTestClient({
+      scopePrefix: 'sess_1',
+      registerHandlers: (rpc) => registerExecutionRunHandlers(rpc, {
+        sessionId: 'sess_1', cwd: process.cwd(), parentProvider: 'copilot',
+        createBackend, sendAcp: () => {}, resolveAccountSettings: async () => ({ profiles: [] }),
+      }),
+    });
+    const result = await client.call<unknown, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+      intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+      profileId: 'missing', permissionMode: 'read_only', retentionPolicy: 'ephemeral',
+      runClass: 'bounded', ioMode: 'request_response',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'execution_run_invalid_action_input' });
+    expect(createBackend).not.toHaveBeenCalled();
+  });
   it('threads one prepared execution contribution handle into the canonical manager', async () => {
     const reports: SessionRuntimeActivityContribution[] = [];
     const runtimeActivityContributionHandle = {

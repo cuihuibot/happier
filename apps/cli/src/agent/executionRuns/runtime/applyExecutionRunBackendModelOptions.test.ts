@@ -22,6 +22,17 @@ function createConfigurableBackend() {
 }
 
 describe('withExecutionRunBackendModelOptions', () => {
+  it('rejects required native configuration if the backend cannot apply it', async () => {
+    const backend: AgentBackend = {
+      startSession: async () => ({ sessionId: 'child' }),
+      sendPrompt: async () => {}, cancel: async () => {}, dispose: async () => {}, onMessage: () => {},
+    };
+    const wrapped = withExecutionRunBackendModelOptions(backend, {
+      sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: { agent: { value: 'reviewer', updatedAt: 1 } } },
+    });
+    await expect(wrapped.startSession()).rejects.toThrow(/config/i);
+  });
+
   it('applies model + config overrides after startSession using the resolved session id', async () => {
     const { backend, setSessionModel, setSessionConfigOption } = createConfigurableBackend();
     const wrapped = withExecutionRunBackendModelOptions(backend, {

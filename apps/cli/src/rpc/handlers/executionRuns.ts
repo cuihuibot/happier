@@ -7,6 +7,8 @@ import type { AcpConfigOptionOverridesV1, BackendTargetRefV1, ExecutionRunPublic
 
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
+  AIBackendProfileSchema,
+  resolveExecutionRunProfile,
   ExecutionRunGetRequestSchema,
   ExecutionRunListRequestSchema,
   ExecutionRunSendRequestSchema,
@@ -23,6 +25,7 @@ import {
 } from '@happier-dev/protocol';
 
 import { ExecutionRunManager } from '@/agent/executionRuns/runtime/ExecutionRunManager';
+import { prepareExecutionRunProfileEnv } from '@/agent/executionRuns/runtime/prepareExecutionRunProfileEnv';
 import type { SessionRuntimeActivityContributionHandle } from '@/session/runtimeActivity/types';
 import {
   ExecutionRunConnectedServicesUnavailableError,
@@ -182,7 +185,22 @@ export function registerExecutionRunHandlers(
     | { ok: false; error: string; errorCode: string }
   > {
     if (!isExecutionRunsEnabled()) return executionRunsDisabled();
-    const parsed = ExecutionRunStartRequestSchema.safeParse(raw);
+    let resolvedRaw = raw;
+    let profileAccountSettings: Record<string, unknown> | null = null;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'profileId' in raw && raw.profileId != null
+      && 'intent' in raw && raw.intent !== 'voice_agent') {
+      try {
+        profileAccountSettings = await ctx.resolveAccountSettings?.() ?? null;
+        const profiles = AIBackendProfileSchema.array().parse(profileAccountSettings?.profiles ?? []);
+        resolvedRaw = resolveExecutionRunProfile(raw as Record<string, unknown>, profiles, false);
+      } catch (error) {
+        return {
+          ok: false, errorCode: 'execution_run_invalid_action_input',
+          error: error instanceof Error ? error.message : 'Unable to resolve worker profile',
+        };
+      }
+    }
+    const parsed = ExecutionRunStartRequestSchema.safeParse(resolvedRaw);
     if (!parsed.success) return invalidParams();
     const startRequestFingerprint = parsed.data.startRequestId
       ? fingerprintExecutionRunStartRequest(parsed.data)
@@ -292,12 +310,17 @@ export function registerExecutionRunHandlers(
     let preparedConnectedServicesForFailureRelease:
       Awaited<ReturnType<typeof prepareExecutionRunConnectedServices>> = null;
     try {
-      const accountSettings = await ctx.resolveAccountSettings?.() ?? null;
+      const accountSettings = profileAccountSettings ?? await ctx.resolveAccountSettings?.() ?? null;
       const startParams: any = {
         ...(parsed.data as any),
         ...(startRequestFingerprint ? { startRequestFingerprint } : {}),
         ...(hasNormalizedReviewIntentInput ? { intentInput: normalizedReviewIntentInput } : {}),
       };
+      const profileEnv = parsed.data.profileId && parsed.data.intent !== 'voice_agent'
+        ? await prepareExecutionRunProfileEnv({
+          profileId: parsed.data.profileId, backendTarget: parsed.data.backendTarget, accountSettings,
+        }) : null;
+      if (profileEnv) startParams.connectedServicesEnv = profileEnv;
 
       // ER-CS: resolve the run's connected-services selection (explicit per-target selection, else the
       // session spawn defaulting owner — the SAME blocking settings bootstrap sessions use, QA2-F02)
@@ -330,7 +353,7 @@ export function registerExecutionRunHandlers(
       }
       preparedConnectedServicesForFailureRelease = preparedConnectedServices;
       if (preparedConnectedServices) {
-        startParams.connectedServicesEnv = preparedConnectedServices.env;
+        startParams.connectedServicesEnv = { ...profileEnv, ...preparedConnectedServices.env };
         startParams.connectedServicesCleanup = preparedConnectedServices.cleanup;
         // Persist the resolved selection into the run's immutable launch record so a later resume can
         // re-materialize the SAME account/profile (fail-closed) instead of ambient auth.
@@ -425,7 +448,7 @@ export function registerExecutionRunHandlers(
     if (!isExecutionRunsEnabled()) return executionRunsDisabled();
     const parsed = ExecutionRunListRequestSchema.safeParse(raw);
     if (!parsed.success) return invalidParams();
-    return { runs: applyExecutionRunListRequest(manager.listPublic(), parsed.data) };
+    return { runs: applyExecutionRunListRequest(manager.listPublic(), parsed.data), nativeWorkerProfiles: true };
   });
 
   rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_GET, async (raw: unknown) => {

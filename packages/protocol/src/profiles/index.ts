@@ -36,3 +36,4 @@ export {
   type BackendProfileRefCandidate,
   type ResolveBackendProfileResult,
 } from './resolveBackendProfile.js';
+export { resolveExecutionRunProfile } from './resolveExecutionRunProfile.js';

@@ -142,6 +142,68 @@ Profile lookup rules:
 
 The CLI does **not** auto-apply your last-used profile. Use `--profile` explicitly.
 
+### Saved native workers (development)
+
+Development builds can store a native-worker mapping in an existing custom profile.
+This CLI/bridge-only path requires the experimental `execution.runs` feature and
+matching development client and host builds. It is not a new app picker or an
+installer for native definitions. Live compatibility is not established for every
+Agent or Copilot version; a mapping is configured, not verified, until launch.
+
+```bash
+happier profiles set reviewer --name "Review worker" --backend agent:copilot \
+  --config-options '{"agent":"installed-reviewer"}' --permission-mode read-only
+happier session run start <parent-session-id> --intent delegate \
+  --profile reviewer --instructions "Review the current change"
+```
+
+The native definition must already be installed and discoverable in the worker's
+workspace. Missing mappings, ambiguous names, incompatible targets, missing required
+environment values, unavailable native choices, or unacknowledged selections fail
+without substituting a generic agent. Other Agent backends need their own
+acknowledged native-selection adapter before they can use this development path.
+
+Copilot discovery opens a short-lived, non-inference ACP session in the requested
+workspace and account context, then reads the Agent's own configuration catalog.
+Its blank default-agent choice is not a named worker. An empty catalog, an
+unsupported discovery adapter, and a failed probe are distinct results; none
+authorizes a generic substitute for a saved named worker.
+
+Explicit call options override saved defaults, but cannot grant more permission
+than the parent permits. Native selection precedes an explicit model selection.
+The run's requested model is not proof of its effective model: use the
+provider-acknowledged `nativeSelection` in run inspection; absent evidence means
+unverified. Connected-service bindings remain account references, not credentials.
+
+For a long-lived worker, configure `--run-class long_lived --retention resumable
+--io-mode streaming` and send follow-ups to the original run ID. A wait timeout is
+not completion. Retained runs preserve their launch target/model/configuration;
+resuming re-resolves the same profile's environment requirements and account
+bindings. Editing a mapping does not retarget an existing run.
+
+### Parent delegation preference (development)
+
+```bash
+happier profiles set --account --delegation-routing happier
+happier profiles set parent-profile --delegation-routing native
+happier profiles set parent-profile --delegation-routing inherit
+```
+
+The account default is native. A parent profile overrides the account only when
+it explicitly sets a route; `inherit` removes that override. Start a fresh parent
+with the profile to apply a change. Already-running parents are not refreshed.
+Current explicit user instructions and enforced safety/permission policy win
+over the saved route. Disabling execution-run guidance removes this prompt block,
+not separately available tools. This is guidance, not a provider-level prohibition
+on native delegation.
+
+Current account and profile editors preserve this preference when you change
+other visible settings; they do not add a routing picker. Older clients may drop
+unknown routing or worker-mapping fields when saving settings or profiles.
+Before downgrading, retain a recoverable settings backup and avoid editing these
+records with an older client. Check or restore the mapping and route before
+starting a new parent or worker after an upgrade.
+
 ### How CLI secret resolution works
 
 When a profile requires secrets, the CLI resolves them in this order:

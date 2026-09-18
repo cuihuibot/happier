@@ -111,6 +111,13 @@ export type ExecutionRunTranscript = z.infer<typeof ExecutionRunTranscriptSchema
 
 export const ExecutionRunPublicStateSchema = z.object({
   runId: z.string().min(1),
+  profileId: z.string().min(1).optional(),
+  requestedModelId: z.string().min(1).optional(),
+  nativeSelection: z.object({
+    agentId: z.string().min(1),
+    modelId: z.string().min(1).optional(),
+    verification: z.literal('provider_acknowledged'),
+  }).optional(),
   callId: z.string().min(1),
   sidechainId: z.string().min(1),
   intent: ExecutionRunIntentSchema,
@@ -135,6 +142,7 @@ export type ExecutionRunPublicState = z.infer<typeof ExecutionRunPublicStateSche
 
 export const ExecutionRunListResponseSchema = z.object({
   runs: z.array(ExecutionRunPublicStateSchema),
+  nativeWorkerProfiles: z.literal(true).optional(),
 }).passthrough();
 export type ExecutionRunListResponse = z.infer<typeof ExecutionRunListResponseSchema>;
 

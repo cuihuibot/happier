@@ -566,6 +566,28 @@ describe('normalizeExecutionRunRpcPayload', () => {
 });
 
 describe('startExecutionRun', () => {
+    it('rejects an older host before sending a named-native start', async () => {
+        callSessionRpc.mockResolvedValueOnce({ runs: [] });
+        const result = await startExecutionRun({
+            token: 'token', sessionId: 'sess-1',
+            ctx: { encryptionKey: new Uint8Array([1, 2, 3, 4]), encryptionVariant: 'legacy' },
+            request: { intent: 'delegate', profileId: 'saved-worker' },
+        });
+        expect(result).toMatchObject({ ok: false, code: 'execution_run_protocol_unsupported' });
+        expect(callSessionRpc).toHaveBeenCalledOnce();
+        expect(callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'sess-1:execution.run.list' }));
+    });
+    it('starts only after the live host declares fail-closed native profile handling', async () => {
+        callSessionRpc.mockResolvedValueOnce({ runs: [], nativeWorkerProfiles: true });
+        callSessionRpc.mockResolvedValueOnce({ runId: 'native-run' });
+        const result = await startExecutionRun({
+            token: 'token', sessionId: 'sess-1',
+            ctx: { encryptionKey: new Uint8Array([1, 2, 3, 4]), encryptionVariant: 'legacy' },
+            request: { intent: 'delegate', profileId: 'saved-worker' },
+        });
+        expect(result).toMatchObject({ ok: true, data: { runId: 'native-run' } });
+        expect(callSessionRpc).toHaveBeenCalledTimes(2);
+    });
     beforeEach(() => {
         callSessionRpc.mockReset();
         listExecutionRunMarkers.mockReset();

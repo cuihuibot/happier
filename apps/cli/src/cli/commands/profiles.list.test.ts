@@ -10,6 +10,11 @@ afterEach(() => {
 });
 
 describe('happier profiles list --json', () => {
+  it('routes profile configuration to validation rather than an unknown command', async () => {
+    const { handleProfilesCommand } = await import('./profiles');
+    await expect(handleProfilesCommand(['set', 'worker', '--unknown', 'value']))
+      .rejects.toThrow(/Unknown profile option/);
+  });
   it('lists built-in profiles when unauthenticated', async () => {
     vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(null);
     const bootstrapSpy = vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext');

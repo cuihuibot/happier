@@ -1,7 +1,8 @@
 import type { AgentBackend } from '@/agent/core/AgentBackend';
 import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import type { AgentPromptPayload } from '@/agent/core/AgentPromptPayload';
-import type { AgentId } from '@happier-dev/agents';
+import { AGENT_IDS, type AgentId } from '@happier-dev/agents';
+import { AGENTS } from '@/backends/catalog';
 import type { AcpConfigOptionOverridesV1, BackendTargetRefV1 } from '@happier-dev/protocol';
 
 import { sendAgentPromptPayload, sendAgentSteerPromptPayload } from '@/agent/core/AgentPromptPayload';
@@ -221,7 +222,7 @@ export function createExecutionRunBackend(opts: Readonly<{
   sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1;
   permissionMode: string;
   accountSettings?: Readonly<Record<string, unknown>> | null;
-  start?: Readonly<{ intentInput?: unknown; retentionPolicy?: string; intent?: string }> | null;
+  start?: Readonly<{ intentInput?: unknown; retentionPolicy?: string; intent?: string; profileId?: string | null }> | null;
   /**
    * Provider-agnostic connected-service environment for this run, already materialized by the daemon
    * run-materialization bridge (e.g. `CODEX_HOME`/`CLAUDE_CONFIG_DIR`). Merged into the isolation
@@ -241,6 +242,16 @@ export function createExecutionRunBackend(opts: Readonly<{
   let acquiredIsolationCleanup: (() => void | Promise<void>) | null = null;
   try {
     const backendId = String(opts.backendId ?? '').trim();
+    if (opts.start?.profileId && opts.start.intent !== 'voice_agent') {
+      const agentId = AGENT_IDS.find((id) => id === backendId);
+      const nativeOptionId = agentId ? AGENTS[agentId]?.executionRunNativeAgentConfigOptionId : undefined;
+      if (!nativeOptionId || opts.backendTarget?.kind === 'configuredAcpBackend') {
+        throw new Error('Backend does not provide acknowledged named-native selection');
+      }
+      if (opts.sessionConfigOptionOverrides?.overrides[nativeOptionId]?.value == null) {
+        throw new Error(`Worker profile requires native selection option "${nativeOptionId}"`);
+      }
+    }
     const accountSettings = resolveExecutionRunAccountSettings({
       backendTarget: opts.backendTarget,
       accountSettings: opts.accountSettings,

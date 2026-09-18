@@ -81,6 +81,22 @@ That split is intentional:
 - `apps/cli/src/agent/acp/**` is for provider-agnostic ACP plumbing
 - built-in generic ACP agents such as Kiro are declared in `@happier-dev/agents` and consumed by the generic ACP layer
 
+Development native-worker mappings reuse this catalog's provider-owned
+`executionRunNativeAgentConfigOptionId`; they do not add a registry of personas or
+backend-per-persona entries. The Copilot execution-run adapter selects the native
+agent before an explicit model and requires returned ACP configuration to
+acknowledge both. The shared ACP strict-acknowledgment path never manufactures an
+effective selection from the request. Providers without an adapter fail closed;
+advertising the hook alone is not live compatibility evidence.
+
+Copilot's provider-owned preflight adapter reuses the ACP backend to read
+`session/new` configuration in the requested workspace and materialized account
+environment, without sending an inference prompt. It disposes the temporary
+backend on success, failure and timeout. Copilot 1.0.86-2 uses `configId: "agent"`
+for custom personas and `currentValue: ""` for the default persona; the shared ACP
+normalizer preserves that valid empty value instead of dropping the control.
+Its session modes are operational Agent/Plan/Autopilot modes, not persona IDs.
+
 ### 4) App agents catalog: `apps/ui/sources/agents/catalog/catalog.ts`
 
 This is the app’s single public surface for screens:

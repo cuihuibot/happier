@@ -32,6 +32,12 @@ There are three distinct ways to start more agent work:
 
 Use a Happier-managed run when the user explicitly asks for a Happier-managed run, Happier delegation run, or Happier subagent; asks for another Agent backend, model provider, model, account, or service that the native facility cannot satisfy; or has enabled a custom rule that requires Happier. The presence of a discoverable Happier action does not by itself choose this route.
 
+Development builds can also use a saved account or parent-profile Happier route.
+The route is applied to a **fresh parent**, not retroactively to an existing
+conversation; explicit current instructions and permission policy still win.
+See [Parent delegation preference](/agents/profiles#parent-delegation-preference-development).
+This is routing guidance, not enforcement that disables an Agent's native tools.
+
 ## Plan run vs plan mode
 
 These are two different things that sound alike:

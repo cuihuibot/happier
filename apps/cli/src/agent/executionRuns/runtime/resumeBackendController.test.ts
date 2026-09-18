@@ -119,6 +119,10 @@ describe('resumeBackendControllerForResumableRun', () => {
       },
       async loadSessionWithReplayCapture(): Promise<StartSessionResult & { replay: unknown[] }> {
         handler?.({ type: 'tool-call', toolName: 'read', args: { file: 'during-load' }, callId: 'load-call' });
+        handler?.({
+          type: 'event', name: 'execution_run_native_selection',
+          payload: { agentId: 'reader', modelId: 'current-default', verification: 'provider_acknowledged' },
+        });
         return { sessionId: 'child_session_2' as SessionId, replay: [] };
       },
       async sendPrompt(): Promise<void> {},
@@ -132,16 +136,19 @@ describe('resumeBackendControllerForResumableRun', () => {
       runId: 'run_load', callId: 'call_load', sidechainId: 'sidechain_load', sessionId: 'parent_1', depth: 0,
       intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, backendId: 'claude',
       instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived',
-      ioMode: 'request_response', status: 'cancelled', startedAtMs: 1, resumeHandle: {
+      ioMode: 'request_response', status: 'cancelled', startedAtMs: 1,
+      nativeSelection: { agentId: 'reader', modelId: 'previous-default', verification: 'provider_acknowledged' },
+      resumeHandle: {
         kind: 'vendor_session.v1', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
         vendorSessionId: 'vendor_session_1',
       },
     };
 
+    const runs = new Map([[run.runId, run]]);
     await expect(resumeBackendControllerForResumableRun({
       runId: run.runId,
       run,
-      runs: new Map([[run.runId, run]]),
+      runs,
       controllers: new Map(),
       budgetRegistry: null,
       createBackend: async () => backend,
@@ -160,6 +167,9 @@ describe('resumeBackendControllerForResumableRun', () => {
       type: 'tool-call',
       name: 'read',
     }), expect.anything());
+    expect(runs.get(run.runId)?.nativeSelection).toEqual({
+      agentId: 'reader', modelId: 'current-default', verification: 'provider_acknowledged',
+    });
   });
 
   it('terminalizes the admitted occurrence when backend message-handler registration fails', async () => {

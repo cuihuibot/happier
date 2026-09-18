@@ -35,7 +35,7 @@ const EXECUTION_RUN_RETENTION_USAGE = formatProtocolEnumUsage(ExecutionRunRetent
 const EXECUTION_RUN_CLASS_USAGE = formatProtocolEnumUsage(ExecutionRunClassSchema);
 const EXECUTION_RUN_IO_MODE_USAGE = formatProtocolEnumUsage(ExecutionRunIoModeSchema);
 
-export const SESSION_RUN_START_USAGE = `happier session run start <session-id-or-prefix-or-tag> --intent <${EXECUTION_RUN_INTENT_USAGE}> --backend <backend-target> [--instructions <text>] [--permission-mode <mode>] [--retention <${EXECUTION_RUN_RETENTION_USAGE}>] [--run-class <${EXECUTION_RUN_CLASS_USAGE}>] [--io-mode <${EXECUTION_RUN_IO_MODE_USAGE}>] [--json]`;
+export const SESSION_RUN_START_USAGE = `happier session run start <session-id-or-prefix-or-tag> --intent <${EXECUTION_RUN_INTENT_USAGE}> [--backend <backend-target>] [--profile <id-or-name>] [--model <id>] [--config-options <json>] [--instructions <text>] [--permission-mode <mode>] [--retention <${EXECUTION_RUN_RETENTION_USAGE}>] [--run-class <${EXECUTION_RUN_CLASS_USAGE}>] [--io-mode <${EXECUTION_RUN_IO_MODE_USAGE}>] [--json]`;
 
 export async function cmdSessionRunStart(
   argv: string[],
@@ -46,6 +46,7 @@ export async function cmdSessionRunStart(
     startIndex: 2,
     valueFlags: [
       '--intent', '--backend', '--instructions', '--permission-mode', '--retention', '--run-class', '--io-mode',
+      '--profile', '--model', '--config-options', '--connected-services',
     ],
   });
   if (!idOrPrefix) {
@@ -55,8 +56,17 @@ export async function cmdSessionRunStart(
   const intentRaw = (readFlagValue(argv, '--intent') ?? '').trim();
   const backendTargetRaw = (readFlagValue(argv, '--backend') ?? '').trim();
   const instructions = readFlagValue(argv, '--instructions') ?? undefined;
+  const profileId = readFlagValue(argv, '--profile');
+  const modelId = readFlagValue(argv, '--model');
+  const configRaw = readFlagValue(argv, '--config-options');
+  const configOptions: unknown = configRaw ? JSON.parse(configRaw) : undefined;
+  const connectedServicesRaw = readFlagValue(argv, '--connected-services');
+  const connectedServices: unknown = connectedServicesRaw ? JSON.parse(connectedServicesRaw) : undefined;
+  for (const flag of ['--profile', '--model', '--config-options', '--connected-services', '--permission-mode']) {
+    if (hasFlag(argv, flag) && !readFlagValue(argv, flag)?.trim()) throw new Error(`Missing value for ${flag}`);
+  }
 
-  if (!intentRaw || !backendTargetRaw) {
+  if (!intentRaw || (!backendTargetRaw && !profileId)) {
     throw new Error(`Usage: ${SESSION_RUN_START_USAGE}`);
   }
 
@@ -66,8 +76,8 @@ export async function cmdSessionRunStart(
     schema: ExecutionRunIntentSchema,
   });
 
-  const backendTarget = parseSingleBackendTargetFromFlag(backendTargetRaw);
-  if (!backendTarget) {
+  const backendTarget = backendTargetRaw ? parseSingleBackendTargetFromFlag(backendTargetRaw) : null;
+  if (backendTargetRaw && !backendTarget) {
     throw new Error(`Usage: ${SESSION_RUN_START_USAGE}`);
   }
 
@@ -126,15 +136,20 @@ export async function cmdSessionRunStart(
     process.exit(1);
   }
 
-  const request = ExecutionRunStartRequestSchema.parse({
+  const rawRequest = {
     intent,
-    backendTarget,
+    ...(backendTarget ? { backendTarget } : {}),
+    ...(profileId ? { profileId } : {}),
+    ...(modelId ? { modelId } : {}),
+    ...(configOptions !== undefined ? { configOptions } : {}),
+    ...(connectedServices ? { connectedServices } : {}),
     ...(instructions ? { instructions } : {}),
-    permissionMode,
-    retentionPolicy,
-    runClass,
-    ioMode,
-  });
+    ...(!profileId || hasFlag(argv, '--permission-mode') ? { permissionMode } : {}),
+    ...(!profileId || hasFlag(argv, '--retention') ? { retentionPolicy } : {}),
+    ...(!profileId || hasFlag(argv, '--run-class') ? { runClass } : {}),
+    ...(!profileId || hasFlag(argv, '--io-mode') ? { ioMode } : {}),
+  };
+  const request = profileId ? rawRequest : ExecutionRunStartRequestSchema.parse(rawRequest);
 
   const ctx = resolveSessionEncryptionContextFromCredentials(credentials, rawSession);
   const mode = resolveSessionStoredContentEncryptionMode(rawSession);
@@ -157,12 +172,18 @@ export async function cmdSessionRunStart(
     throw new Error(normalized.errorMessage ?? normalized.errorCode);
   }
 
-  const result = normalized.data as any;
-  const runPayload = result && typeof result === 'object' && result.ok === true ? result.data : null;
+  const result = normalized.data;
+  const runPayload = result && typeof result === 'object' && 'data' in result ? result.data : result;
+  if (!runPayload || typeof runPayload !== 'object' || !('runId' in runPayload) || typeof runPayload.runId !== 'string') {
+    throw new Error('Execution run start returned no run handle; do not retry until the parent run list has been checked');
+  }
 
   if (json) {
-    const backendId = backendTarget.kind === 'builtInAgent' ? backendTarget.agentId : backendTarget.backendId;
-    await printJsonEnvelope({ ok: true, kind: 'session_run_start', data: { sessionId, ...(runPayload as any), intent, backendId, backendTarget } });
+    const backendId = backendTarget?.kind === 'builtInAgent' ? backendTarget.agentId : backendTarget?.backendId;
+    await printJsonEnvelope({ ok: true, kind: 'session_run_start', data: {
+      sessionId, ...(runPayload && typeof runPayload === 'object' ? runPayload : {}),
+      intent, ...(backendTarget ? { backendId, backendTarget } : {}), ...(profileId ? { requestedProfile: profileId } : {}),
+    } });
     return;
   }
 
