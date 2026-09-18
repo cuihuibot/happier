@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { ExecutionRunPublicStateSchema } from '@happier-dev/protocol';
 
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
@@ -56,6 +57,16 @@ export function createBackendControllerMessageHandler(args: Readonly<{
     // Backends may deliver queued messages after stop/dispose. A retired controller must not
     // overwrite a successor's resume handle, transcript, buffers, or activity markers.
     if (!args.isCurrentController()) return;
+
+    if (msg.type === 'event' && msg.name === 'execution_run_native_selection') {
+      const selection = ExecutionRunPublicStateSchema.shape.nativeSelection.unwrap().parse(msg.payload);
+      const run = args.runs.get(args.runId);
+      if (run) {
+        args.runs.set(args.runId, { ...run, nativeSelection: selection });
+        args.onPublicStateUpdated?.(args.runId);
+      }
+      return;
+    }
 
     if (msg.type === 'event' && msg.name === 'vendor_session_id') {
       const payload = msg.payload;

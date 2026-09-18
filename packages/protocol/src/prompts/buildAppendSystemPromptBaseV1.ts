@@ -3,6 +3,7 @@ import { buildExecutionRunsGuidanceBlockV1, type ExecutionRunsGuidanceEntryV1 } 
 import { buildMemoryRecallGuidanceBlockV1 } from './memoryRecallGuidanceV1.js';
 import { buildPromptPlanV1, renderPromptPlanV1, type PromptPlanV1 } from './promptPlanV1.js';
 import { buildHappierBaseSystemPromptV1 } from './systemPromptBaseV1.js';
+import { resolveCodingPromptBehaviorV1 } from './codingPromptBehaviorV1.js';
 
 function coerceExecutionRunsGuidanceEntriesV1(raw: unknown): ExecutionRunsGuidanceEntryV1[] {
   if (!Array.isArray(raw)) return [];
@@ -104,7 +105,11 @@ export function buildCodingSessionPromptPlanBaseV1(args: Readonly<{
     ? Math.floor(maxCharsRaw)
     : 4_000;
   const entries = coerceExecutionRunsGuidanceEntriesV1(settings?.executionRunsGuidanceEntries);
-  const guidance = buildExecutionRunsGuidanceBlockV1({ entries, maxChars }).text;
+  const guidance = buildExecutionRunsGuidanceBlockV1({
+    entries,
+    maxChars,
+    delegationRouting: resolveCodingPromptBehaviorV1(settings).delegationRouting,
+  }).text;
 
   if (guidance) {
     blocks.push({

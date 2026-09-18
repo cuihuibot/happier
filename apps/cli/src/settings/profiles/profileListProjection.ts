@@ -19,6 +19,11 @@ export type ProfilesListItem = Readonly<{
   authMode?: AIBackendProfile['authMode'];
   requiresMachineLoginTargetKey?: string;
   requiresMachineLogin?: string;
+  workerMapping?: Readonly<{
+    backendTarget: BackendTargetRefV1;
+    configOptionIds: string[];
+    selectionStatus: 'unverified';
+  }>;
 }>;
 
 export type SpawnProfileOptionItem = ProfilesListItem & Readonly<{
@@ -40,6 +45,11 @@ export function mapProfileToListItem(profile: AIBackendProfile): ProfilesListIte
     ...(profile.authMode ? { authMode: profile.authMode } : {}),
     ...(profile.requiresMachineLoginTargetKey ? { requiresMachineLoginTargetKey: profile.requiresMachineLoginTargetKey } : {}),
     ...(profile.requiresMachineLogin ? { requiresMachineLogin: profile.requiresMachineLogin } : {}),
+    ...(profile.executionRunDefaults ? { workerMapping: {
+      backendTarget: profile.executionRunDefaults.backendTarget,
+      configOptionIds: Object.keys(profile.executionRunDefaults.sessionConfigOptionOverrides.overrides),
+      selectionStatus: 'unverified' as const,
+    } } : {}),
   };
 }
 

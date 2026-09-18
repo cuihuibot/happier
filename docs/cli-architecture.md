@@ -443,7 +443,43 @@ RPC is used to send commands over the Socket.IO connection:
 
 This mechanism allows the server and mobile clients to drive local actions without exposing a broad REST surface.
 
+## Native worker profiles and parent routing (development)
+
+`profiles set` uses the existing optimistic account-settings update owner.
+`AIBackendProfile.executionRunDefaults` stores target, canonical config selections,
+optional lifetime and connected-account references; it does not install definitions.
+`resolveExecutionRunProfile` resolves ID/name before action defaults and permission
+admission. The execution-run RPC repeats host-side validation, materializes the
+existing profile environment requirements, then lets connected-service materialization
+override that overlay. Neither overlay mutates the parent's process environment.
+
+The immutable launch record retains the profile ID plus requested model/config and
+connected selection. Resume rehydrates environment/account references without
+reapplying an edited mapping. Public state separates `requestedModelId` from
+provider-acknowledged `nativeSelection`; absent acknowledgment remains unverified.
+
+`codingPromptBehaviorV1.delegationRouting` is the sole saved route owner.
+Account native is the effective default; a parent override can be absent.
+The existing session prompt merge and first-turn runtime delivery consume one
+resolved block. Guidance-off and feature-off preserve their existing behavior.
+Only fresh parents receive changed guidance. Current user instructions and enforced
+permissions remain above the preference.
+
+Session-scoped MCP waits use the session execution-run service when supplied.
+The local-RPC adapter otherwise reuses the same wait algorithm over
+`execution.run.get`; there is no host `execution.run.wait` RPC. Both paths retain
+terminal results, typed lookup errors and observation-timeout semantics without
+starting or replacing a worker.
+
+Native mapping is development-only and requires matching client/host builds:
+the start service requires the live list response's `nativeWorkerProfiles` capability
+before sending a profile start. Marker/history fallback cannot establish support.
+Older passthrough hosts are rejected before launch, not probed by sending work.
+Real Copilot native/model acceptance, fresh-parent tool routing and independent
+quality/compatibility review remain release gates; local fixture tests do not close them.
+
 ## Implementation references
+
 - CLI entry: `apps/cli/src/index.ts`
 - Daemon: `apps/cli/src/daemon`
 - Control server/client: `apps/cli/src/daemon/controlServer.ts`, `apps/cli/src/daemon/controlClient.ts`

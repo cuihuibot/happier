@@ -20,6 +20,14 @@ Happier also separates three related ideas:
 
 An action can be available and discoverable without being exposed as a direct tool. That mode is called **discoverable-only**.
 
+For the development [saved native-worker flow](/agents/profiles#saved-native-workers-development),
+discover the current action contract rather than guessing tool names.
+`action_execute` accepts `{actionId, input}`; dotted ActionSpec IDs are not tool
+names. Retain the shell bridge's invoking-session binding even when omitting the
+payload `sessionId`. A denied discovery surface is not authorization to switch
+surfaces. Follow-ups target the original run ID, and an observation timeout does
+not authorize a duplicate start.
+
 ## What “Happier tools” means
 
 Happier tools are the actions and external tools that an agent can use through Happier itself.

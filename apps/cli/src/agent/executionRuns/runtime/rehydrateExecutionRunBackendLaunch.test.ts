@@ -35,6 +35,12 @@ function baseRun(launch: ExecutionRunState['launch']): ExecutionRunState {
 }
 
 describe('resolveExecutionRunResumeBackendOptions', () => {
+  it('fails closed when the saved worker profile is no longer available for environment rehydration', async () => {
+    await expect(resolveExecutionRunResumeBackendOptions({
+      run: baseRun({ profileId: 'deleted-worker' }),
+      resolveAccountSettings: async () => ({ profiles: [] }),
+    })).rejects.toThrow(/profile/i);
+  });
   it('re-resolves account settings + re-materializes the SAME persisted CS selection and threads model/effort', async () => {
     const cleanup = vi.fn(async () => undefined);
     const prepareConnectedServices = vi.fn(

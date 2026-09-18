@@ -3466,6 +3466,7 @@ export {
   isProfileCompatibleWithBackendTarget,
   isProfileCompatibleWithAgent,
   resolveBackendProfile,
+  resolveExecutionRunProfile,
   type AIBackendProfile,
   type BackendProfileRefCandidate,
   type EnvVarRequirement,

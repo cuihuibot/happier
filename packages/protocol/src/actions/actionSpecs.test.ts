@@ -50,6 +50,18 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'memory.ensure_up_to_date',
 ] as const;
 
+describe('saved native worker tool contracts', () => {
+  it.each(['subagents.delegate.start', 'subagents.plan.start', 'execution.run.start'] as const)(
+    '%s accepts profile-only targeting without inserting defaults ahead of resolution',
+    (id) => {
+      const input = { profileId: 'saved-reader', instructions: 'Read only', ...(id === 'execution.run.start' ? { intent: 'delegate' } : {}) };
+      const parsed = getActionSpec(id).inputSchema.safeParse(input);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) expect(parsed.data).toEqual(input);
+    },
+  );
+});
+
 const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'prompt_doc.update',
   'prompt_bundle.update',

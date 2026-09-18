@@ -50,6 +50,21 @@ function createCredentials(): DataKeyCredentials {
 }
 
 describe('resolveEffectiveCodingPromptText', () => {
+  it.each([null, 'unknown', 'parent'])('composes one account-inherited route into the real shell-bridge prompt (%s)', async (profileId) => {
+    const text = await resolveEffectiveCodingPromptText({
+      credentials: createCredentials(), profileId, providerId: 'copilot',
+      toolDelivery: 'shell_bridge', toolDeliverySessionId: 'parent-session', toolDeliveryDirectory: '/workspace',
+      executionRunsFeatureEnabled: true, memoryRecallGuidanceEnabled: false,
+      settings: {
+        codingPromptBehaviorV1: { delegationRouting: 'happier' },
+        profiles: [{ id: 'parent', name: 'Parent', codingPromptBehaviorV1: { responseOptions: 'disabled' } }],
+      },
+    });
+    expect(text.split('# Happier-Managed Runs')).toHaveLength(2);
+    expect(text).toContain('Delegation route: Happier');
+    expect(text).not.toContain("Use the current backend's native subagent facility by default.");
+    expect(text).toContain('parent-session');
+  });
   it('decrypts referenced prompt docs and caches artifact bodies across calls', async () => {
     const credentials = createCredentials();
 

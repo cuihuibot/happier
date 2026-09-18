@@ -126,6 +126,7 @@ export const ExecutionRunReplaySeedRequestSchema = z.discriminatedUnion('kind', 
 export type ExecutionRunReplaySeedRequest = z.infer<typeof ExecutionRunReplaySeedRequestSchema>;
 
 export const ExecutionRunStartRequestSchema = z.object({
+  profileId: z.string().min(1).nullable().optional(),
   /**
    * Stable caller-owned identity for one retryable start attempt. Hosts use it only for exact
    * reconciliation/idempotency; it is not launch provenance and is never shown as user-facing state.

@@ -302,9 +302,9 @@ describe('startHappyServer (MCP integration)', () => {
     const fakeClient: HappyMcpSessionClient = {
       sessionId: 'sess_mcp_1',
       rpcHandlerManager,
+      getPermissionMode: () => 'read-only',
       sendClaudeSessionMessage: () => {},
       updateMetadata: () => {},
-      getPermissionMode: () => 'default',
     };
 
     const server = await startHappyServer(fakeClient);
@@ -370,7 +370,27 @@ describe('startHappyServer (MCP integration)', () => {
         },
       });
       const started = parseMcpJsonText(startedRaw);
+      expect(startedRaw.isError, JSON.stringify(startedRaw)).not.toBe(true);
       expect(String(started.runId)).toMatch(/^run_/);
+
+      const waitedRaw = await client.callTool({
+        name: 'action_execute',
+        arguments: {
+          actionId: 'execution.run.wait',
+          input: { runId: started.runId, timeoutSeconds: 2, pollIntervalMs: 250 },
+        },
+      });
+      expect(waitedRaw.isError, JSON.stringify(waitedRaw)).not.toBe(true);
+      expect(parseMcpJsonText(waitedRaw)).toMatchObject({
+        status: 'succeeded',
+        result: { run: { runId: started.runId, status: 'succeeded' }, latestToolResult: { summary: 'Summary.' } },
+      });
+      const missingRaw = await client.callTool({
+        name: 'action_execute',
+        arguments: { actionId: 'execution.run.wait', input: { runId: 'run_missing' } },
+      });
+      expect(missingRaw.isError).toBe(true);
+      expect(parseMcpJsonText(missingRaw)).toMatchObject({ errorCode: 'execution_run_not_found' });
 
       const listedRaw = await client.callTool({
         name: 'action_execute',
@@ -460,6 +480,7 @@ describe('startHappyServer (MCP integration)', () => {
   it('surfaces execution.run.start action_execute app-level failures as MCP tool errors', async () => {
     const fakeClient: HappyMcpSessionClient = {
       sessionId: 'sess_mcp_run_start_error_1',
+      getPermissionMode: () => 'read-only',
       rpcHandlerManager: {
         invokeLocal: vi.fn(async (method: string) => {
           if (method === 'execution.run.start') {
@@ -474,7 +495,6 @@ describe('startHappyServer (MCP integration)', () => {
       } as any,
       sendClaudeSessionMessage: () => {},
       updateMetadata: () => {},
-      getPermissionMode: () => 'default',
     };
 
     const server = await startHappyServer(fakeClient);

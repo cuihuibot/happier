@@ -423,6 +423,7 @@ const SessionCatalogListInputSchema = z.object({
 }).passthrough();
 
 const IntentStartCommonSchema = z.object({
+  profileId: z.string().min(1).nullable().optional(),
   sessionId: z.string().min(1).optional(),
   backendTargetKeys: z.array(BackendTargetKeySchema).min(1),
   instructions: z.string().trim().min(1),
@@ -458,6 +459,18 @@ const PlanStartInputSchema = IntentStartCommonSchema.extend({
   ioMode: z.enum(['request_response', 'streaming']).default('request_response'),
 }).passthrough();
 
+function withNativeWorkerProfileInput(schema: z.ZodObject<z.ZodRawShape>) {
+  const deferred = new Set(['backendTargetKeys', 'backendTarget', 'permissionMode', 'retentionPolicy', 'runClass', 'ioMode']);
+  const fields = Object.fromEntries(Object.entries(schema.shape).filter(([key]) => deferred.has(key)).map(([key, field]) => [
+    key, z.optional(field instanceof z.ZodDefault ? field.removeDefault() : field),
+  ]));
+  return schema.extend(fields).superRefine((value, context) => {
+    if (value.profileId != null && value.intent !== 'voice_agent') return;
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) for (const issue of parsed.error.issues) context.addIssue({ ...issue });
+  }).transform((value) => value.profileId != null && value.intent !== 'voice_agent' ? value : schema.parse(value));
+}
+
 const DelegateStartInputSchema = IntentStartCommonSchema.extend({
   permissionMode: ExecutionRunActionPermissionModeSchema.optional(),
   retentionPolicy: z.enum(['ephemeral', 'resumable']).default('ephemeral'),
@@ -478,6 +491,7 @@ const ExecutionRunIdInputSchema = z.object({
 }).passthrough();
 
 const ExecutionRunStartInputSchema = z.object({
+  profileId: z.string().min(1).nullable().optional(),
   sessionId: z.string().min(1).optional(),
   intent: z.enum(['review', 'plan', 'delegate', 'voice_agent', 'memory_hints']),
   backendTarget: BackendTargetRefSchema,
@@ -1337,7 +1351,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
 	      mcp: true,
 	      cli: true,
 	    },
-	    inputSchema: PlanStartInputSchema,
+	    inputSchema: withNativeWorkerProfileInput(PlanStartInputSchema),
 	  },
   {
     id: 'subagents.delegate.start',
@@ -1352,6 +1366,8 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       title: 'Start a delegation run',
       description: 'Start Happier-managed delegation runs using explicit agent provider/backend targets.',
       fields: [
+        { path: 'profileId', title: 'Saved native worker profile', widget: 'text', optionsSourceId: 'sessions.spawn.profiles.available',
+          description: 'Optional ID or unique name. Supplies one backend and defaults; explicit call options and parent permission policy take precedence.' },
         {
           path: 'backendTargetKeys',
           title: 'Provider/backend targets',
@@ -1415,7 +1431,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
 	      mcp: true,
 	      cli: true,
 	    },
-	    inputSchema: DelegateStartInputSchema,
+	    inputSchema: withNativeWorkerProfileInput(DelegateStartInputSchema),
 	  },
   {
     id: 'voice_agent.start',
@@ -1499,6 +1515,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     inputHints: {
       title: 'Start a run',
       fields: [
+        { path: 'profileId', title: 'Saved native worker profile', widget: 'text', optionsSourceId: 'sessions.spawn.profiles.available' },
         { path: 'sessionId', title: 'Session id', widget: 'text' },
         { path: 'intent', title: 'Intent', widget: 'text', required: true },
         { path: 'backendTarget', title: 'Backend target (json)', widget: 'textarea', required: true },
@@ -1536,7 +1553,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
         },
       ],
     },
-    inputSchema: ExecutionRunStartInputSchema,
+    inputSchema: withNativeWorkerProfileInput(ExecutionRunStartInputSchema),
   },
   {
     id: 'execution.run.list',

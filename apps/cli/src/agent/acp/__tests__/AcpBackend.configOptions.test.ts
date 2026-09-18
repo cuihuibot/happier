@@ -185,6 +185,22 @@ async function readRecordedParams(path: string): Promise<Record<string, unknown>
 }
 
 describe('AcpBackend session configOptions', () => {
+  it('rejects an unacknowledged required selection instead of manufacturing effective state', async () => {
+    await withTempDir('happier-acp-required-selection-', async (dir) => {
+      const backend = new AcpBackend({
+        agentName: 'test', cwd: dir, command: process.execPath,
+        args: [writeFakeAcpAgentScript({ dir, modelSetResponse: 'staleEcho' })],
+      });
+      try {
+        const started = await backend.startSession();
+        await expect(backend.setSessionConfigOption(
+          started.sessionId, 'model', 'composer-2.5[fast=true]', { requireAcknowledgement: true },
+        )).rejects.toThrow(/acknowledge/i);
+      } finally {
+        await backend.dispose();
+      }
+    });
+  });
   it('captures configOptions from newSession and can set a config option', async () => {
     await withTempDir('happier-acp-config-options-', async (dir) => {
       const scriptPath = writeFakeAcpAgentScript({ dir });

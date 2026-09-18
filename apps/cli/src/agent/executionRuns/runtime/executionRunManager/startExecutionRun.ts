@@ -199,6 +199,7 @@ export async function startExecutionRun(args: Readonly<{
   // backend with the SAME model, config overrides, and connected-service account (fail-closed) rather
   // than ambient auth + default model. Safe inputs only — no credentials/env values/closures.
   const launch = {
+    ...(args.params.profileId && args.params.intent !== 'voice_agent' ? { profileId: args.params.profileId } : {}),
     ...(args.params.launchOrigin ? { launchOrigin: args.params.launchOrigin } : {}),
     ...(args.params.modelId ? { modelId: args.params.modelId } : {}),
     ...(args.params.sessionConfigOptionOverrides

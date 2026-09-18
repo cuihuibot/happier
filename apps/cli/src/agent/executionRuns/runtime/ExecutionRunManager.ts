@@ -383,6 +383,9 @@ export class ExecutionRunManager {
     const availableActionIds = getExecutionRunAvailableActionIds(run, ctrl);
     return ExecutionRunPublicStateSchema.parse({
       runId: run.runId,
+      ...(run.launch?.profileId ? { profileId: run.launch.profileId } : {}),
+      ...(run.launch?.modelId ? { requestedModelId: run.launch.modelId } : {}),
+      ...(run.nativeSelection ? { nativeSelection: run.nativeSelection } : {}),
       callId: run.callId,
       sidechainId: run.sidechainId,
       intent: run.intent,
@@ -411,6 +414,9 @@ export class ExecutionRunManager {
       const availableActionIds = getExecutionRunAvailableActionIds(run, ctrl);
       const parsed = ExecutionRunPublicStateSchema.parse({
         runId: run.runId,
+        ...(run.launch?.profileId ? { profileId: run.launch.profileId } : {}),
+        ...(run.launch?.modelId ? { requestedModelId: run.launch.modelId } : {}),
+        ...(run.nativeSelection ? { nativeSelection: run.nativeSelection } : {}),
         callId: run.callId,
         sidechainId: run.sidechainId,
         intent: run.intent,
@@ -587,7 +593,7 @@ export class ExecutionRunManager {
           backendId: run.backendId,
           backendTarget: run.backendTarget,
           permissionMode: run.permissionMode,
-          start: { retentionPolicy: run.retentionPolicy, intent: run.intent },
+          start: { retentionPolicy: run.retentionPolicy, intent: run.intent, ...(run.launch?.profileId ? { profileId: run.launch.profileId } : {}) },
           ...(resumeOptions.modelId ? { modelId: resumeOptions.modelId } : {}),
           ...(resumeOptions.sessionConfigOptionOverrides
             ? { sessionConfigOptionOverrides: resumeOptions.sessionConfigOptionOverrides }

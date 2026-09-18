@@ -42,5 +42,8 @@ describe('resolveSessionAgentToolPresentation', () => {
     });
 
     expect(resolved.map((tool) => tool.name)).toContain('subagents_delegate_start');
+    const worker = resolved.find((tool) => tool.name === 'subagents_delegate_start');
+    expect(worker?.inputSchema.required ?? []).not.toContain('backendTargetKeys');
+    expect(worker?.inputSchema.properties).toHaveProperty('profileId');
   });
 });

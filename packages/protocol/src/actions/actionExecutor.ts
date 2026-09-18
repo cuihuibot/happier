@@ -54,6 +54,8 @@ import {
   type SpawnConfigOptionValue,
 } from './sessionSpawnConfigOptions.js';
 import { EXECUTION_RUN_ACTION_PERMISSION_MODES } from './executionRunActionPermissionMode.js';
+import { resolveExecutionRunProfile } from '../profiles/resolveExecutionRunProfile.js';
+import type { AIBackendProfile } from '../profiles/backendProfileSchema.js';
 
 /**
  * Resolve the canonical run-start model + config-option selection from an agent-facing action
@@ -194,6 +196,7 @@ type SessionStopActionDependencyResult = Readonly<{
 }>;
 
 export type ActionExecutorDeps = Readonly<{
+  executionRunProfilesRead?: () => Promise<readonly AIBackendProfile[]>;
   // Execution runs (session-scoped RPC)
   executionRunStart: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
   executionRunList: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
@@ -1397,6 +1400,26 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           requiredByPolicy: ctx.bypassApprovals ? false : deps.isActionApprovalRequired?.(actionId, ctx) === true,
         });
     const isApprovalAction = isApprovalActionId(actionId);
+    if (!existingAdmission
+      && (actionId === 'subagents.delegate.start' || actionId === 'subagents.plan.start' || actionId === 'execution.run.start')
+      && input && typeof input === 'object' && 'profileId' in input && input.profileId != null
+      && !(actionId === 'execution.run.start' && 'intent' in input && input.intent === 'voice_agent')) {
+      if (!deps.executionRunProfilesRead) {
+        return { ok: false, errorCode: 'unsupported_action', error: 'Native worker profile resolution is unavailable on this surface' };
+      }
+      try {
+        input = resolveExecutionRunProfile(
+          {
+            ...(input as Record<string, unknown>),
+            ...(actionId === 'subagents.plan.start' ? { intent: 'plan' } : {}),
+          },
+          await deps.executionRunProfilesRead(),
+          actionId !== 'execution.run.start',
+        );
+      } catch (error) {
+        return { ok: false, errorCode: 'invalid_parameters', error: error instanceof Error ? error.message : 'Worker profile resolution failed' };
+      }
+    }
     const parsed = existingAdmission
       ? { success: true as const, data: existingAdmission.input }
       : (spec.inputSchema as any).safeParse(input ?? {});
@@ -1735,6 +1758,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               sessionId,
               {
                 intent,
+                ...(typeof parsed.data.profileId === 'string' ? { profileId: parsed.data.profileId } : {}),
                 ...(ctx.actionRequestId
                   ? { startRequestId: `${ctx.actionRequestId}:${backendTargetKey}` }
                   : {}),

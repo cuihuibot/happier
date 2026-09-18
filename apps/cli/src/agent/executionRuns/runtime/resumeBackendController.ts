@@ -191,7 +191,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
     args.controllers.set(args.runId, resumeCtrl);
     controllerPreparing = false;
     args.runs.set(args.runId, {
-      ...args.run,
+      ...(args.runs.get(args.runId) ?? args.run),
       status: 'running',
       finishedAtMs: undefined,
       error: undefined,

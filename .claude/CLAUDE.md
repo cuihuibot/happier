@@ -10,15 +10,16 @@ Run commands in the foreground when interactive approval may be required.
 
 ## Agent routing and Happier-managed runs
 
-Use the current provider's native subagent facility for ordinary subagent, delegation, and parallel-agent requests. Native provider subagents remain the default.
+Follow the effective delegation route in the fresh parent's runtime prompt. With no saved route, use the current provider's native subagent facility for ordinary delegation. A saved Happier route changes that default; an explicit current user instruction and enforced permission/scope policy take precedence.
 
 Use a Happier-managed execution/delegation run only when:
 
 - the user explicitly asks for a Happier-managed run, delegation, or subagent—including natural wording such as “Happier subagent,” “Happier delegation run,” or “Happier execution run”;
 - the user explicitly requests another backend, provider, model, account, or service that the current provider's native facility cannot satisfy; or
 - an enabled custom rule explicitly requires Happier.
+- the effective account or parent-profile delegation route is Happier.
 
-Do not silently change backend, provider, model, account, or execution topology. A generic request remains native even if a Happier action is discoverable. If a native or Happier run fails, do not substitute another backend unless the user request or an enabled custom rule authorizes it.
+Do not silently change backend, provider, model, account, or execution topology. Discoverability alone does not select Happier. If a native or Happier run fails, do not substitute another backend unless the user request or an enabled custom rule authorizes it.
 
 Runtime prompt guidance and runtime action discovery are authoritative. After a Happier authorization condition applies, use `action_spec_search` / `action_spec_get` to discover the current action contract and `action_options_resolve` with the action's partial draft to resolve valid backend, model, configuration, and connected-service values. Do not duplicate the runtime action catalog here, guess values, or rely on hard-coded option-source ids.
 

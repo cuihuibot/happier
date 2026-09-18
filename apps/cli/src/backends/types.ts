@@ -250,6 +250,7 @@ export type CliDetectSpec = Readonly<{
 
 export type AgentCatalogEntry = Readonly<{
   id: CatalogAgentId;
+  executionRunNativeAgentConfigOptionId?: string;
   cliSubcommand: CatalogAgentId;
   /**
    * Optional CLI subcommand handler for this agent.
