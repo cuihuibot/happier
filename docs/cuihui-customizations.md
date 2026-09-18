@@ -48,6 +48,54 @@ yarn vitest run \
 yarn typecheck
 ```
 
+### Copilot regular-session steering
+
+The Copilot ACP runtime enables the shared steering delivery path in
+`apps/cli/src/backends/copilot/acp/runtime.ts`. This is the accepted interim
+behavior, not a claim of non-interrupting steering: live comparisons with
+Copilot CLI 1.0.86 found that a second `session/prompt` aborts the active task in
+both regular sessions and managed execution runs, even when Happier sends no
+`session/cancel`. The replacement instruction and a subsequent ordinary message
+were answered, but cancellation/lifecycle presentation remains imperfect.
+Proper non-interrupting behavior is tracked in
+[cuihuibot/happier#20](https://github.com/cuihuibot/happier/issues/20).
+
+Steering support is advertised separately from availability: delivery is
+available only during an active turn and remains subject to the shared
+permission and payload checks. Queueing and explicit interrupt-and-send
+(`send_now` for a busy regular session, `delivery: interrupt` for a managed run)
+retain their existing routes. No SDK migration is selected automatically.
+
+The Copilot SDK offers a separate `session.send` mode, `immediate`, for
+non-interrupting delivery. A direct SDK 1.0.13 / CLI 1.0.86 control test preserved
+a running 20-second MCP tool and produced one changed answer after completion.
+This establishes provider capability, not integration into Happier: its SDK
+runtime remains experimental and is not automatically selected for ACP sessions.
+Shell tools need a separate check because native immediate delivery can move a
+shell wait into the background without killing the command.
+
+The PR workflow's CLI lane runs the named **Copilot steering regression** step.
+Its failure fails the CLI job and CI aggregate. The regression prevents silently
+removing the provider opt-in, verifies active/idle availability, and covers late
+steering errors without failing a newer turn. It does not prove that a provider
+version preserves running tools.
+
+Run the same check locally:
+
+```bash
+yarn workspace @happier-dev/cli test:copilot-steering
+```
+
+Before deploying to another environment, repeat the disposable real-provider
+check and record runtime versions, actual cancellation behavior, replacement
+answer, completion events, and ordinary follow-up. The interim release accepts
+interruption; a future non-interrupting implementation must instead preserve the
+original task without lost output or duplicate completion.
+
+Rollout requires rebuilding and updating the Happier CLI on each target machine,
+updating version-pinned daemon entrypoints, and starting fresh or restarted
+session runners. This PR does not itself update running machines.
+
 ### Provider-autonomous continuation
 
 Copilot ACP can resolve `session/prompt` with `stopReason: end_turn` and then

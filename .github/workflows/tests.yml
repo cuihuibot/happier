@@ -1021,6 +1021,12 @@ jobs:
         continue-on-error: true
         run: yarn workspace @happier-dev/cli test:unit
 
+      - name: Copilot steering regression
+        id: copilot-steering
+        if: ${{ matrix.part == 1 && !cancelled() }}
+        continue-on-error: true
+        run: yarn workspace @happier-dev/cli test:copilot-steering
+
       - name: Test root CLI common dist admission owner
         id: cli-common-dist
         if: ${{ matrix.part == 1 && !cancelled() }}
@@ -1038,11 +1044,12 @@ jobs:
         env:
           CLI_PART: ${{ matrix.part }}
           UNIT_TESTS_OUTCOME: ${{ steps.unit-tests.outcome }}
+          COPILOT_STEERING_OUTCOME: ${{ steps.copilot-steering.outcome }}
           CLI_COMMON_DIST_OUTCOME: ${{ steps.cli-common-dist.outcome }}
           INTEGRATION_TESTS_OUTCOME: ${{ steps.integration-tests.outcome }}
         run: |
-          if [ "$UNIT_TESTS_OUTCOME" != "success" ] || [ "$INTEGRATION_TESTS_OUTCOME" != "success" ] || { [ "$CLI_PART" = "1" ] && [ "$CLI_COMMON_DIST_OUTCOME" != "success" ]; }; then
-            echo "One or more cli test lanes failed: unit=$UNIT_TESTS_OUTCOME common_dist=$CLI_COMMON_DIST_OUTCOME integration=$INTEGRATION_TESTS_OUTCOME" >&2
+          if [ "$UNIT_TESTS_OUTCOME" != "success" ] || [ "$INTEGRATION_TESTS_OUTCOME" != "success" ] || { [ "$CLI_PART" = "1" ] && { [ "$COPILOT_STEERING_OUTCOME" != "success" ] || [ "$CLI_COMMON_DIST_OUTCOME" != "success" ]; }; }; then
+            echo "One or more cli test lanes failed: unit=$UNIT_TESTS_OUTCOME steering=$COPILOT_STEERING_OUTCOME common_dist=$CLI_COMMON_DIST_OUTCOME integration=$INTEGRATION_TESTS_OUTCOME" >&2
             exit 1
           fi
 
