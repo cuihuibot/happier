@@ -96,9 +96,10 @@ export type ExecutionRunState = Readonly<{
   retentionPolicy: ExecutionRunManagerStartParams['retentionPolicy'];
   runClass: ExecutionRunManagerStartParams['runClass'];
   ioMode: ExecutionRunManagerStartParams['ioMode'];
+  boundedTimeoutMs?: number;
   notifyParentOnCompletion?: boolean;
   /**
-   * Cumulative backend turn count for long-lived runs.
+   * Cumulative backend turn count, including resumed bounded runs.
    * Persisted in run state so resuming cannot reset enforcement (for example maxTurns).
    */
   turnCount?: number;

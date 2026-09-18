@@ -220,7 +220,7 @@ Call `session_permission_mode_set`:
 
 ### Start an execution run (plan/review/delegate/voice agent)
 
-Call `execution_run_start` to start a structured Happier-managed run in a session. It requires an `intent` plus a backend target.
+Call `execution_run_start` to start a structured Happier-managed run in a session. It requires an `intent` plus a backend target, or a saved native-worker `profileId` for a non-voice run.
 
 Example:
 
@@ -234,6 +234,18 @@ Example:
 ```
 
 The backend target selects which provider/backend runs the execution run. It is not a capacity slot. If you choose multiple backend targets through an action that supports that shape, Happier starts one managed run per selected provider/backend.
+
+On builds supporting native-worker profiles, an existing saved profile supplies the backend and launch defaults:
+
+```json
+{
+  "intent": "delegate",
+  "profileId": "saved-worker",
+  "instructions": "Review the proposed change and report concrete risks."
+}
+```
+
+In a session-agent call, omit `sessionId` to use the invoking session. Profiles do not grant permissions beyond the parent session's allowed permissions.
 
 ## What tools you get
 

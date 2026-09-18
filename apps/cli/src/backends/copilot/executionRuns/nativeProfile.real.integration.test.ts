@@ -127,6 +127,64 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
     }
   }, 120_000);
 
+  it('completes a resumed bounded profile run with fresh results and the same native session', async () => {
+    const { root, cwd, vendorHome, marker } = await createFixture();
+    const profile = AIBackendProfileSchema.parse({
+      id: 'bounded-reader', name: 'Bounded acceptance reader',
+      executionRunDefaults: {
+        backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+        sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: { agent: { value: 'h8-reader', updatedAt: 1 } } },
+        runClass: 'bounded', retentionPolicy: 'resumable', ioMode: 'request_response',
+      },
+    });
+    const manager = new ExecutionRunManager({
+      cwd, parentProvider: 'copilot', sendAcp: () => {},
+      resolveAccountSettings: () => ({ profiles: [profile] }),
+      createBackend: (options) => createExecutionRunBackend({
+        ...options, cwd, accountSettings: {},
+        connectedServicesEnv: { COPILOT_HOME: vendorHome },
+      }),
+    });
+    let runId: string | undefined;
+    try {
+      const input = ExecutionRunStartRequestSchema.parse(resolveExecutionRunProfile({
+        profileId: profile.id, intent: 'delegate', permissionMode: 'read_only', modelId: 'gpt-6-astra',
+        instructions: `Do not use tools. Remember token ${marker} and number 37. Return exactly {"summary":"${marker}:37","deliverables":[]}.`,
+      }, [profile], false));
+      const started = await manager.start({ ...input, sessionId: `parent-${marker}` });
+      runId = started.runId;
+      await manager.waitForTerminal(runId);
+      expect(manager.getPublic(runId)?.status).toBe('succeeded');
+      expect(manager.getLatestToolResult(runId)).toMatchObject({ summary: `${marker}:37` });
+      expect(manager.getPublic(runId)?.nativeSelection).toMatchObject({
+        agentId: 'h8-reader', modelId: 'gpt-6-astra', verification: 'provider_acknowledged',
+      });
+      const resumeHandle = manager.getPublic(runId)?.resumeHandle;
+      expect(resumeHandle?.kind).toBe('vendor_session.v1');
+
+      expect(await manager.send(runId, {
+        resume: true,
+        message: 'Without tools, recall the token and number. Return JSON with summary equal to the token, a colon, and the number plus one; deliverables: [].',
+      })).toMatchObject({ ok: true });
+      expect(manager.getLatestToolResult(runId)).toBeNull();
+      await manager.waitForTerminal(runId);
+      expect(manager.getPublic(runId)?.status).toBe('succeeded');
+      expect(manager.getLatestToolResult(runId)).toMatchObject({ summary: `${marker}:38` });
+      expect(manager.getPublic(runId)?.resumeHandle).toEqual(resumeHandle);
+      logPublicDiagnostic('boundedResume', {
+        marker, status: manager.getPublic(runId)?.status,
+        selection: manager.getPublic(runId)?.nativeSelection,
+        sameNativeSession: true, source: import.meta.url,
+      });
+    } finally {
+      if (runId) {
+        await manager.stop(runId);
+        await manager.waitForTerminal(runId);
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 240_000);
+
   it('preserves two acknowledged native identities, explicit model and original-run recall through resume', async () => {
     const { root, cwd, vendorHome, marker } = await createFixture();
     const profiles = ['h8-reader', 'h8-checker'].map((agent) => AIBackendProfileSchema.parse({
