@@ -433,7 +433,12 @@ export const AGENTS_CORE = {
         detectKey: providerDetectKey('copilot'),
         flavorAliases: ['github-copilot', 'copilot-cli'],
         cloudConnect: null,
-        connectedServices: null,
+        connectedServices: {
+            supportedServiceIds: ['github'],
+            supportedKindsByServiceId: {
+                github: ['token'],
+            },
+        },
         resume: { vendorResume: 'supported', vendorResumeIdField: 'copilotSessionId' },
         sessionStorage: { direct: false, persisted: true },
         sessionCapabilities: {

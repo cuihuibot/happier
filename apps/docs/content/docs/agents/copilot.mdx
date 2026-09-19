@@ -1,6 +1,6 @@
 ---
 title: GitHub Copilot
-description: Configure GitHub Copilot in Happier, including local CLI login, auth detection, and machine-specific setup.
+description: Configure GitHub Copilot in Happier, including connected GitHub profiles, local CLI login, and machine-specific setup.
 ---
 
 Happier can run **GitHub Copilot CLI** through the local `copilot` binary on your machine.
@@ -33,7 +33,34 @@ npm install -g @github/copilot
 copilot --version
 ```
 
-## Local authentication in Happier
+## Choose authentication for a new session
+
+Copilot can use either a connected GitHub token profile or the selected machine's native authentication.
+
+<Callout type="info">
+  Connected GitHub profiles for Copilot are currently available only in
+  development builds. This support has not been included in a published
+  release yet.
+</Callout>
+
+To use a connected profile, choose it in the new-session auth picker before starting Copilot. Happier supplies the selected token to the new Copilot process as `COPILOT_GITHUB_TOKEN`.
+
+The token is projected only when the process starts. Its value is not stored in session metadata. If the selected GitHub credential is not token-based, Happier rejects it instead of falling back to another credential.
+
+Copilot CLI 1.0.86 checks token sources in this order:
+
+1. `COPILOT_GITHUB_TOKEN`
+2. `GH_TOKEN`
+3. `GITHUB_TOKEN`
+4. Copilot's stored login credentials
+
+This means an explicitly selected connected profile takes precedence over ambient environment variables and stored Copilot login credentials for that process.
+
+If you leave GitHub on **native** authentication, Happier does not project a connected token. Copilot keeps using the machine's existing environment variables, local `gh auth token`, or Copilot login behavior.
+
+GitHub OAuth profiles are not supported for Copilot in this build.
+
+## Manage native authentication
 
 Happier shows Copilot’s machine-local auth state in:
 
@@ -56,8 +83,8 @@ For the shared user guide, see [Provider authentication](/agents/provider-authen
 
 ## Notes
 
-- Copilot auth in Happier is machine-local. If you log in on one machine, another machine still needs its own local login.
-- If you prefer token-based auth, Happier can detect that and show it as an environment-backed method.
+- Native Copilot auth is machine-local. If you log in on one machine, another machine still needs its own local login or a connected GitHub token profile selected for the new session.
+- Happier can detect token-based native auth and show it as an environment-backed method.
 
 ## Troubleshooting
 
