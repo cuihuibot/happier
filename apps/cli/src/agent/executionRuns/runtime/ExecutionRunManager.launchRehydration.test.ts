@@ -51,6 +51,134 @@ function createContributionHarness() {
 }
 
 describe('ExecutionRunManager — resume rehydrates the immutable launch record', () => {
+  it('retains the per-run bounded timeout after resume instead of using the manager default', async () => {
+    vi.useFakeTimers();
+    let prompts = 0;
+    const manager = new ExecutionRunManager({
+      parentProvider: 'copilot', cwd: process.cwd(), sendAcp: () => {},
+      boundedTimeoutMs: 10_000,
+      createBackend: () => {
+        const fixture = createResumableBackend();
+        return {
+          ...fixture.backend,
+          async sendPrompt() {
+            prompts += 1;
+            if (prompts > 1) await new Promise<void>(() => {});
+            fixture.getHandler()?.({ type: 'model-output', fullText: '{"summary":"ready","deliverables":[]}' });
+          },
+        };
+      },
+    });
+    let runId: string | undefined;
+    try {
+      const started = await manager.start({
+        sessionId: 'parent_1', intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+        permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'bounded',
+        ioMode: 'request_response', boundedTimeoutMs: 100,
+      });
+      runId = started.runId;
+      await manager.waitForTerminal(runId);
+      expect(manager.getPublic(runId)?.status).toBe('succeeded');
+      expect(await manager.send(runId, { message: 'Continue.', resume: true })).toEqual({ ok: true });
+      await vi.advanceTimersByTimeAsync(99);
+      expect(manager.getPublic(runId)?.status).toBe('running');
+      await vi.advanceTimersByTimeAsync(2);
+      expect(manager.getPublic(runId)?.status).toBe('timeout');
+      expect(manager.getLatestToolResult(runId)).toMatchObject({ status: 'timeout' });
+    } finally {
+      if (runId) {
+        await manager.stop(runId);
+        await manager.waitForTerminal(runId);
+      }
+      vi.useRealTimers();
+    }
+  });
+
+  it('completes each resumed bounded turn with a fresh structured result in the same vendor session', async () => {
+    let turn = 0;
+    const loaded: string[] = [];
+    const manager = new ExecutionRunManager({
+      parentProvider: 'copilot',
+      cwd: process.cwd(),
+      maxTurns: 3,
+      createBackend: () => {
+        const fixture = createResumableBackend();
+        return {
+          ...fixture.backend,
+          async loadSessionWithReplayCapture(id: SessionId) {
+            loaded.push(id);
+            return { sessionId: id, replay: [] };
+          },
+          async sendPrompt() {
+            turn += 1;
+            fixture.getHandler()?.({ type: 'model-output', fullText: JSON.stringify({
+              summary: `turn-${turn}`, deliverables: [],
+            }) });
+          },
+        };
+      },
+      sendAcp: () => {},
+    });
+    const started = await manager.start({
+      sessionId: 'parent_1', intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+      instructions: 'Return a result.', permissionMode: 'read_only', retentionPolicy: 'resumable',
+      runClass: 'bounded', ioMode: 'request_response',
+    });
+    await manager.waitForTerminal(started.runId);
+    expect(manager.getLatestToolResult(started.runId)).toMatchObject({ summary: 'turn-1' });
+    for (const expected of [2, 3]) {
+      expect(await manager.send(started.runId, { message: 'Continue.', resume: true })).toEqual({ ok: true });
+      await vi.waitFor(() => expect(manager.getPublic(started.runId)?.status).toBe('succeeded'), { timeout: 500 });
+      await manager.waitForTerminal(started.runId);
+      expect(manager.getLatestToolResult(started.runId)).toMatchObject({ summary: `turn-${expected}` });
+      expect(manager.getStructuredMeta(started.runId)?.payload).toMatchObject({ summary: `turn-${expected}` });
+      expect(manager.getPublic(started.runId)?.resumeHandle).toMatchObject({ vendorSessionId: 'child_1' });
+    }
+    expect(loaded).toEqual(['child_1', 'child_1']);
+    expect(await manager.send(started.runId, { message: 'Over limit.', resume: true })).toMatchObject({
+      ok: false, errorCode: 'execution_run_not_allowed', error: 'Turn limit exceeded',
+    });
+    expect(manager.getPublic(started.runId)?.status).toBe('succeeded');
+    expect(await manager.ensure(started.runId, { resume: true })).toEqual({ ok: true });
+    expect(await manager.send(started.runId, { message: 'Over limit after ensure.', resume: true })).toMatchObject({
+      ok: false, errorCode: 'execution_run_not_allowed', error: 'Turn limit exceeded',
+    });
+    await manager.stop(started.runId);
+    await manager.waitForTerminal(started.runId);
+  });
+
+  it('rejects a resume while the prior bounded occurrence is still disposing', async () => {
+    let release!: () => void;
+    const disposing = new Promise<void>((resolve) => { release = resolve; });
+    const manager = new ExecutionRunManager({
+      parentProvider: 'copilot', cwd: process.cwd(), sendAcp: () => {},
+      createBackend: () => {
+        const fixture = createResumableBackend();
+        return {
+          ...fixture.backend,
+          async sendPrompt() {
+            fixture.getHandler()?.({ type: 'model-output', fullText: '{"summary":"ready","deliverables":[]}' });
+          },
+          async dispose() { await disposing; },
+        };
+      },
+    });
+    const started = await manager.start({
+      sessionId: 'parent_1', intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+      permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'bounded', ioMode: 'request_response',
+    });
+    try {
+      await vi.waitFor(() => expect(manager.getPublic(started.runId)?.status).toBe('succeeded'));
+      expect(await manager.send(started.runId, { message: 'Too early.', resume: true })).toMatchObject({
+        ok: false, errorCode: 'execution_run_busy',
+      });
+      expect(manager.getLatestToolResult(started.runId)).toMatchObject({ summary: 'ready' });
+    } finally {
+      release();
+      await manager.waitForTerminal(started.runId);
+    }
+  });
+
   it('releases connected-service materialization when a terminal run has no resume handle', async () => {
     const cleanup = vi.fn(async () => {});
     const manager = new ExecutionRunManager({

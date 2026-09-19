@@ -14,6 +14,7 @@ describe('executionRunsGuidanceV1', () => {
     expect(result.text).toContain('intentional explicit cross-session target');
     expect(result.text.toLowerCase()).not.toContain('custom rule');
     expect(result.text).not.toContain('another host');
+    expect(result.text).not.toMatch(/executionRunsNotifyParentOnCompletionDefault=(true|false)/);
   });
 
   it('keeps the fixed guidance when the custom-rule budget is too small', () => {

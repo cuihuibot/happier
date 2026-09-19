@@ -4109,7 +4109,12 @@ export class AcpBackend implements AgentBackend {
         return { kind: 'exact_final_response', response };
       })
       .catch((error: unknown) => {
-        if (!this.disposed && this.waitingForResponse) {
+        if (
+          !this.disposed
+          && this.waitingForResponse
+          && turnGeneration === this.turnGeneration
+          && !this.isTurnGenerationClosed(turnGeneration)
+        ) {
           const normalizedError = error instanceof Error ? error : new Error(String(error));
           this.failPendingResponseWait(normalizedError);
           this.emit({ type: 'status', status: 'error', detail: normalizedError.message });

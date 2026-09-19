@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   buildBackendTargetKey,
+  getActionSpec,
   listActionSpecs,
   type ActionId,
   type ActionsSettingsV1,
@@ -218,6 +219,24 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
   }
 
   if (params.toolName === 'execution_run_start') {
+    if (params.args && typeof params.args === 'object' && 'profileId' in params.args && params.args.profileId != null
+      && (!('intent' in params.args) || params.args.intent !== 'voice_agent')) {
+      const profileInput = getActionSpec('execution.run.start').inputSchema.safeParse(params.args);
+      if (!profileInput.success || !profileInput.data || typeof profileInput.data !== 'object' || Array.isArray(profileInput.data)) {
+        return err('invalid_action_input', 'Invalid execution run payload');
+      }
+      if ('sessionId' in profileInput.data && typeof profileInput.data.sessionId === 'string'
+        && profileInput.data.sessionId.trim() !== params.sessionId) {
+        return err('execution_run_not_allowed', 'This tool call is scoped to a different session');
+      }
+      // Profile defaults must be resolved by the canonical action owner, not the legacy wire adapter.
+      return await params.deps.executeActionByToolName(
+        'execution_run_start',
+        { ...profileInput.data, sessionId: params.sessionId },
+        params.sessionId,
+        ...actionExecutionOptionsArgs,
+      );
+    }
     const parsed = executionRunStartToolInputSchema.safeParse(params.args ?? {});
     if (parsed.success) {
       const intent = parsed.data.intent;

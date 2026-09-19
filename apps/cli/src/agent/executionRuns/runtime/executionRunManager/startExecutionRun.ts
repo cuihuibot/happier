@@ -230,6 +230,7 @@ export async function startExecutionRun(args: Readonly<{
     retentionPolicy: args.params.retentionPolicy,
     runClass: args.params.runClass,
     ioMode: args.params.ioMode,
+    ...(typeof args.params.boundedTimeoutMs === 'number' ? { boundedTimeoutMs: args.params.boundedTimeoutMs } : {}),
     notifyParentOnCompletion: args.params.notifyParentOnCompletion
       ?? (args.params.accountSettings?.executionRunsNotifyParentOnCompletionDefault === true),
     ...(Object.keys(launch).length > 0 ? { launch } : {}),

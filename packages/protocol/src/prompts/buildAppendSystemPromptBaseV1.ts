@@ -109,6 +109,7 @@ export function buildCodingSessionPromptPlanBaseV1(args: Readonly<{
     entries,
     maxChars,
     delegationRouting: resolveCodingPromptBehaviorV1(settings).delegationRouting,
+    notifyParentOnCompletionDefault: settings?.executionRunsNotifyParentOnCompletionDefault === true,
   }).text;
 
   if (guidance) {

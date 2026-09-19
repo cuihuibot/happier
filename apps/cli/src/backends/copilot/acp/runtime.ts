@@ -30,6 +30,8 @@ export function createCopilotAcpRuntime(params: {
     mcpServers: params.mcpServers,
     permissionHandler: params.permissionHandler,
     sessionIdentity: { kind: 'manifest-metadata' },
+    // ACP currently interrupts; non-interrupting steering is tracked in cuihuibot/happier#20.
+    inFlightSteer: { enabled: true },
     onThinkingChange: params.onThinkingChange,
     memoryRecallGuidance: {
       enabled: params.memoryRecallGuidanceEnabled === true,

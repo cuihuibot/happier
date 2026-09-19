@@ -42,7 +42,7 @@ import { getExecutionRunAvailableActionIds } from '@/agent/executionRuns/runtime
 import { executeBoundedBackendRun } from '@/agent/executionRuns/runtime/boundedBackendRun';
 import { ensureExecutionRun } from '@/agent/executionRuns/runtime/executionRunManager/ensureExecutionRun';
 import { finishExecutionRun } from '@/agent/executionRuns/runtime/executionRunManager/finishExecutionRun';
-import { startExecutionRun } from '@/agent/executionRuns/runtime/executionRunManager/startExecutionRun';
+import { startExecutionRun, settleExecutionRunControllerOccurrence } from '@/agent/executionRuns/runtime/executionRunManager/startExecutionRun';
 import {
   resolveExecutionRunResumeBackendOptions,
   type PrepareExecutionRunConnectedServicesForResume,
@@ -646,9 +646,52 @@ export class ExecutionRunManager {
       // is intentionally outside this queue so stop can reach cancellation when sendPrompt stalls.
       const prepared = await this.withRunLifecycleLock(
         runId,
-        async () => await prepareBackendLongLivedRunResume(sendArgs),
+        async () => {
+          const current = this.runs.get(runId);
+          const controller = this.controllers.get(runId);
+          const backendController = controller?.kind === 'backend' ? controller : null;
+          if (run.runClass === 'bounded' && !backendController?.turnInFlight
+            && this.maxTurns !== null && (backendController?.turnCount ?? current?.turnCount ?? 0) >= this.maxTurns) {
+            return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Turn limit exceeded' } as const;
+          }
+          return await prepareBackendLongLivedRunResume(sendArgs);
+        },
       );
       if (!prepared.ok) return prepared;
+      if (run.runClass === 'bounded') {
+        const ctrl = prepared.controller;
+        if (this.controllers.get(runId) !== ctrl || ctrl.cancelled) {
+          return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Not running' };
+        }
+        if (ctrl.turnInFlight) {
+          return this.send(runId, { message: params.message, delivery: params.delivery });
+        }
+        // Provider completion precedes parsing and disposal; that occurrence still owns the run.
+        if (ctrl.turnEpoch > 0) {
+          return { ok: false, errorCode: 'execution_run_busy', error: 'Run is busy' };
+        }
+        const current = this.runs.get(runId)!;
+        this.runs.set(runId, {
+          ...current,
+          summary: undefined,
+          latestToolResult: undefined,
+          structuredMeta: undefined,
+        });
+        // A resumed bounded turn needs the same parsing, completion, and cleanup as its first turn.
+        void this.executeBoundedRun({
+          runId,
+          callId: run.callId,
+          sidechainId: run.sidechainId,
+          startedAtMs: run.startedAtMs,
+          params: { ...run, instructions: params.message },
+        }).catch((error) => {
+          logger.warn('[EXECUTION RUN] Resumed bounded completion failed', { runId, error });
+        }).finally(() => {
+          settleExecutionRunControllerOccurrence(this.controllers, runId, ctrl);
+        });
+        this.emitPublicStateUpdated(runId);
+        return { ok: true };
+      }
       return sendPreparedBackendLongLivedRun(sendArgs, prepared.controller);
     }
 

@@ -31,6 +31,24 @@ describe('buildAppendSystemPromptBaseV1', () => {
     })).toBe('BASE');
   });
 
+  it('reports the effective completion-notification default in either delegation route', () => {
+    for (const delegationRouting of ['native', 'happier']) {
+      for (const notificationSetting of [true, false, undefined, 'true']) {
+        const out = buildAppendSystemPromptBaseV1({
+          settings: {
+            executionRunsNotifyParentOnCompletionDefault: notificationSetting,
+            codingPromptBehaviorV1: { v: 1, delegationRouting },
+          },
+          base: 'BASE',
+          executionRunsFeatureEnabled: true,
+        });
+
+        const reportedDefault = out.match(/executionRunsNotifyParentOnCompletionDefault=(true|false)/)?.[1];
+        expect(reportedDefault).toBe(String(notificationSetting === true));
+      }
+    }
+  });
+
   it('does not mention custom rules when no valid enabled rules exist', () => {
     const out = buildAppendSystemPromptBaseV1({
       settings: {

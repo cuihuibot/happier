@@ -3,9 +3,18 @@ import type { ExecutionRunServiceResult, WaitForExecutionRunResult } from '@/ses
 import type { HappierBuiltInToolDispatchResult } from './types';
 
 export function normalizeExecutionRunToolResult(
-  result: ExecutionRunServiceResult<unknown> | WaitForExecutionRunResult,
+  result: ExecutionRunServiceResult<unknown> | WaitForExecutionRunResult
+    | Readonly<{ ok: false; errorCode: string; error: string; details?: unknown }>,
 ): HappierBuiltInToolDispatchResult {
   if (!result.ok) {
+    if ('errorCode' in result) {
+      return {
+        ok: false,
+        errorCode: result.errorCode,
+        error: result.error,
+        ...(result.details === undefined ? {} : { details: result.details }),
+      };
+    }
     return { ok: false, errorCode: result.code, error: result.message ?? result.code };
   }
 

@@ -3,6 +3,30 @@ import { describe, expect, it } from 'vitest';
 import { mergeSessionMetadataForStartup } from './mergeSessionMetadataForStartup';
 
 describe('mergeSessionMetadataForStartup', () => {
+    it('refreshes the CLI version on attach without replacing workspace identity or permissions', () => {
+        const merged = mergeSessionMetadataForStartup({
+            current: {
+                path: '/workspace/original', host: 'original-host', version: '0.2.10',
+                homeDir: '/home/user', happyHomeDir: '/home/user/.happier',
+                happyLibDir: '/opt/happier/lib', happyToolsDir: '/opt/happier/tools',
+                hostPid: 1, permissionMode: 'read-only', permissionModeUpdatedAt: 10,
+            },
+            next: {
+                path: '/workspace/other', host: 'runtime-host', version: '0.2.12',
+                homeDir: '/home/user', happyHomeDir: '/home/user/.happier',
+                happyLibDir: '/opt/happier/lib', happyToolsDir: '/opt/happier/tools',
+                hostPid: 2, permissionMode: 'yolo', permissionModeUpdatedAt: 20,
+            },
+            nowMs: 30,
+            mode: 'attach',
+        });
+
+        expect(merged).toMatchObject({
+            path: '/workspace/original', host: 'original-host', version: '0.2.12',
+            hostPid: 2, permissionMode: 'read-only', permissionModeUpdatedAt: 10,
+        });
+    });
+
     it('clears the MCP restart marker after startup applies the desired selection', () => {
         const merged = mergeSessionMetadataForStartup({
             current: {
