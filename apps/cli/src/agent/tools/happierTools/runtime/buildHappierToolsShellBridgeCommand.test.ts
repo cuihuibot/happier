@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
@@ -12,6 +14,8 @@ const ENV_KEYS = [
   'HAPPIER_PUBLIC_SERVER_URL',
   'HAPPIER_WEBAPP_URL',
   'HAPPIER_ACCESS_TOKEN',
+  'HAPPIER_JS_RUNTIME_PATH',
+  'HAPPIER_CLI_SUBPROCESS_ENTRYPOINT',
 ] as const;
 
 let envScope = createEnvKeyScope(ENV_KEYS);
@@ -26,6 +30,74 @@ afterEach(() => {
 });
 
 describe('buildHappierToolsShellBridgeCommand', () => {
+  it.runIf(process.platform !== 'win32')(
+    'trusts the packaged managed-runtime wrapper bridge command it generates for change_title',
+    async () => {
+      // Reproduces the packaged macOS install: the subprocess launcher resolves to the
+      // managed JavaScript runtime wrapper and the CLI entrypoint is `package-dist/index.mjs`.
+      const happierHome = createTempDirSync('happier-tools-shell-bridge-packaged-');
+      tempDirs.add(happierHome);
+
+      const wrapperDir = join(happierHome, 'tools', 'js-runtime', 'current', 'bin');
+      mkdirSync(wrapperDir, { recursive: true });
+      const wrapperPath = join(wrapperDir, 'happier-js-runtime');
+      writeFileSync(wrapperPath, '#!/bin/sh\nexec node "$@"\n');
+      chmodSync(wrapperPath, 0o755);
+
+      const entrypointDir = join(happierHome, 'cli', 'current', 'package-dist');
+      mkdirSync(entrypointDir, { recursive: true });
+      const entrypointPath = join(entrypointDir, 'index.mjs');
+      writeFileSync(entrypointPath, '');
+
+      envScope.patch({
+        HAPPIER_HOME_DIR: happierHome,
+        HAPPIER_JS_RUNTIME_PATH: wrapperPath,
+        HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: entrypointPath,
+      });
+      vi.resetModules();
+
+      const {
+        buildHappierToolsShellBridgeCommand,
+        parseTrustedHappierToolsShellBridgeCommand,
+      } = await import('./buildHappierToolsShellBridgeCommand');
+
+      const command = buildHappierToolsShellBridgeCommand([
+        'call',
+        '--source',
+        'happier',
+        '--tool',
+        'change_title',
+        '--args-json',
+        '{"title":"Renamed"}',
+        '--json',
+      ]);
+
+      expect(command).toContain(wrapperPath);
+      expect(command).toContain(entrypointPath);
+      expect(parseTrustedHappierToolsShellBridgeCommand(command)).toMatchObject({
+        kind: 'call',
+        source: 'happier',
+        tool: 'change_title',
+        args: { title: 'Renamed' },
+      });
+
+      // The trust boundary still rejects a different wrapper or entrypoint.
+      expect(
+        parseTrustedHappierToolsShellBridgeCommand(
+          command.replace(wrapperPath, '/tmp/attacker/happier-js-runtime'),
+        ),
+      ).toBeNull();
+      expect(
+        parseTrustedHappierToolsShellBridgeCommand(
+          command.replace(entrypointPath, '/tmp/attacker/payload.mjs'),
+        ),
+      ).toBeNull();
+      expect(
+        parseTrustedHappierToolsShellBridgeCommand(`${command} && touch /tmp/happier-pwn`),
+      ).toBeNull();
+    },
+  );
+
   it('recognizes only the exact locally generated bridge launcher as trusted', async () => {
     const {
       buildHappierToolsShellBridgeCommand,

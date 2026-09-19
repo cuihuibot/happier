@@ -32,6 +32,64 @@ describe('parseHappierToolsShellBridgeCommand', () => {
     });
   });
 
+  it('parses managed js-runtime wrapper invoked happier tools call bridge commands', () => {
+    // Packaged installs resolve the CLI subprocess launcher to the managed
+    // JavaScript runtime wrapper (`<happy-home>/tools/js-runtime/current/bin/happier-js-runtime`),
+    // not to a bare `node`/`bun` executable.
+    const command =
+      `'/Users/leeroy/.happier/tools/js-runtime/current/bin/happier-js-runtime' '--no-warnings' '--no-deprecation' '/Users/leeroy/.happier/cli/current/package-dist/index.mjs' 'tools' 'call' '--source' 'happier' '--tool' 'change_title' '--args-json' '{"title":"Renamed"}' '--json'`;
+
+    expect(parseHappierToolsShellBridgeCommand(command)).toEqual({
+      kind: 'call',
+      rawCommand: command,
+      sessionId: null,
+      directory: null,
+      source: 'happier',
+      tool: 'change_title',
+      argsJson: '{"title":"Renamed"}',
+      args: { title: 'Renamed' },
+      json: true,
+    });
+  });
+
+  it('parses the Windows managed js-runtime wrapper shim', () => {
+    const command =
+      `'C:\\Users\\leeroy\\.happier\\tools\\js-runtime\\current\\bin\\happier-js-runtime.cmd' '--no-warnings' '--no-deprecation' 'C:\\Users\\leeroy\\.happier\\cli\\current\\package-dist\\index.mjs' 'tools' 'list' '--json'`;
+
+    expect(parseHappierToolsShellBridgeCommand(command)).toMatchObject({
+      kind: 'list',
+      json: true,
+    });
+  });
+
+  it('parses managed js-runtime wrapper bridge commands from non-stable channel installs', () => {
+    // Preview/publicdev installs live under `cli-<suffix>`, not `cli`.
+    const command =
+      `'/Users/leeroy/.happier/tools/js-runtime/current/bin/happier-js-runtime' '--no-warnings' '--no-deprecation' '/Users/leeroy/.happier/cli-preview/current/package-dist/index.mjs' 'tools' 'call' '--source' 'happier' '--tool' 'change_title' '--args-json' '{"title":"Renamed"}' '--json'`;
+
+    expect(parseHappierToolsShellBridgeCommand(command)).toMatchObject({
+      kind: 'call',
+      source: 'happier',
+      tool: 'change_title',
+      args: { title: 'Renamed' },
+    });
+  });
+
+  it.each([
+    // Arbitrary executables must never become bridge launchers.
+    `'/usr/local/bin/happier-launcher' '/Users/leeroy/.happier/cli/current/package-dist/index.mjs' 'tools' 'call' '--source' 'happier' '--tool' 'change_title' '--args-json' '{"title":"Renamed"}'`,
+    `'/tmp/attacker/sh' '/Users/leeroy/.happier/cli/current/package-dist/index.mjs' 'tools' 'call' '--source' 'happier' '--tool' 'change_title'`,
+    // Wrapper basename must match exactly, not by prefix/suffix.
+    `'/tmp/attacker/happier-js-runtime-evil' '/Users/leeroy/.happier/cli/current/package-dist/index.mjs' 'tools' 'call' '--source' 'happier' '--tool' 'change_title'`,
+    `'/tmp/attacker/evil-happier-js-runtime' '/Users/leeroy/.happier/cli/current/package-dist/index.mjs' 'tools' 'call' '--source' 'happier' '--tool' 'change_title'`,
+    // Wrong entrypoint under a valid wrapper.
+    `'/Users/leeroy/.happier/tools/js-runtime/current/bin/happier-js-runtime' '/tmp/attacker/payload.mjs' 'tools' 'call' '--source' 'happier' '--tool' 'change_title'`,
+    // Chained execution after a valid wrapper bridge command.
+    `'/Users/leeroy/.happier/tools/js-runtime/current/bin/happier-js-runtime' '/Users/leeroy/.happier/cli/current/package-dist/index.mjs' 'tools' 'list' '--json' && touch /tmp/happier-pwn`,
+  ])('rejects non-canonical wrapper bridge commands: %s', (command) => {
+    expect(parseHappierToolsShellBridgeCommand(command)).toBeNull();
+  });
+
   it('parses happier tools call invocations with JSON args', () => {
     expect(
       parseHappierToolsShellBridgeCommand(

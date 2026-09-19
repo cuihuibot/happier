@@ -28,9 +28,29 @@ function getShellPathBasename(token: string): string {
   return lastSlashIndex >= 0 ? normalized.slice(lastSlashIndex + 1) : normalized;
 }
 
+/**
+ * Launchers the Happier CLI itself can put at the front of a generated
+ * `happier tools ...` bridge command.
+ *
+ * Packaged installs do not run the entrypoint with a bare `node`/`bun`: the CLI
+ * subprocess launcher resolves to the managed JavaScript runtime wrapper
+ * (`happier-js-runtime`, `happier-js-runtime.cmd` on Windows — see
+ * `@happier-dev/cli-common` `resolveManagedJavaScriptRuntimeBinaryName`). This
+ * list is structural recognition only; callers that need authorization use
+ * `parseTrustedHappierToolsShellBridgeCommand`, which additionally requires the
+ * command to equal the one this running CLI would generate.
+ */
+const BRIDGE_LAUNCHER_BASENAMES = new Set([
+  'node',
+  'node.exe',
+  'bun',
+  'bun.exe',
+  'happier-js-runtime',
+  'happier-js-runtime.cmd',
+]);
+
 function isRuntimeExecutableToken(token: string): boolean {
-  const base = getShellPathBasename(token);
-  return base === 'node' || base === 'node.exe' || base === 'bun' || base === 'bun.exe';
+  return BRIDGE_LAUNCHER_BASENAMES.has(getShellPathBasename(token));
 }
 
 function isLikelyHappierCliEntrypointToken(token: string): boolean {
@@ -39,6 +59,9 @@ function isLikelyHappierCliEntrypointToken(token: string): boolean {
   if (base.includes('happier')) return true;
   if (normalized.includes('/@happier-dev/cli/')) return true;
   if (normalized.includes('/apps/cli/')) return true;
+  // Installed releases place the CLI entrypoint at `<installRoot>/current/package-dist/index.mjs`.
+  // The install root is channel-specific (`cli`, `cli-preview`, ...), so match the packaged layout.
+  if (base === 'index.mjs' && normalized.endsWith('/package-dist/index.mjs')) return true;
   return (base === 'index.mjs' || base === 'index.ts') && normalized.includes('/cli/');
 }
 

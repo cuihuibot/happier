@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { CodexLikePermissionHandler } from './CodexLikePermissionHandler';
 import { SessionPermissionRpcRouter } from './sessionPermissionRpcRouter';
+import { buildHappierToolsShellBridgeCommand } from '@/agent/tools/happierTools/runtime/buildHappierToolsShellBridgeCommand';
+import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 import { createRunScopedExecutionPermissionHandler } from '@/agent/executionRuns/runtime/runScopedExecutionPermissionHandler';
 import { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
 
@@ -393,6 +397,61 @@ describe('CodexLikePermissionHandler', () => {
       }),
     );
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'auto-approves a packaged managed-runtime shell-bridge change_title call in read-only mode',
+    async () => {
+      // Packaged installs launch the bridge through the managed JS runtime wrapper
+      // + `package-dist/index.mjs`. That command must stay trusted and never surface
+      // as an ordinary shell permission request.
+      const happierHome = createTempDirSync('happier-permission-bridge-home-');
+      const wrapperDir = join(happierHome, 'tools', 'js-runtime', 'current', 'bin');
+      mkdirSync(wrapperDir, { recursive: true });
+      const wrapperPath = join(wrapperDir, 'happier-js-runtime');
+      writeFileSync(wrapperPath, '#!/bin/sh\nexec node "$@"\n');
+      chmodSync(wrapperPath, 0o755);
+      const entrypointDir = join(happierHome, 'cli', 'current', 'package-dist');
+      mkdirSync(entrypointDir, { recursive: true });
+      const entrypointPath = join(entrypointDir, 'index.mjs');
+      writeFileSync(entrypointPath, '');
+
+      const previousRuntimePath = process.env.HAPPIER_JS_RUNTIME_PATH;
+      const previousEntrypoint = process.env.HAPPIER_CLI_SUBPROCESS_ENTRYPOINT;
+      process.env.HAPPIER_JS_RUNTIME_PATH = wrapperPath;
+      process.env.HAPPIER_CLI_SUBPROCESS_ENTRYPOINT = entrypointPath;
+
+      try {
+        const command = buildHappierToolsShellBridgeCommand([
+          'call',
+          '--session-id',
+          'session-test',
+          '--source',
+          'happier',
+          '--tool',
+          'change_title',
+          '--args-json',
+          '{"title":"Renamed"}',
+          '--json',
+        ]);
+        expect(command).toContain(wrapperPath);
+
+        const session = new FakeSession();
+        const handler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });
+        handler.setPermissionMode('read-only');
+
+        await expect(handler.handleToolCall('tool-packaged-title', 'bash', { command })).resolves.toEqual({
+          decision: 'approved',
+        });
+        expect(session.agentState.requests['tool-packaged-title']).toBeUndefined();
+      } finally {
+        if (previousRuntimePath === undefined) delete process.env.HAPPIER_JS_RUNTIME_PATH;
+        else process.env.HAPPIER_JS_RUNTIME_PATH = previousRuntimePath;
+        if (previousEntrypoint === undefined) delete process.env.HAPPIER_CLI_SUBPROCESS_ENTRYPOINT;
+        else process.env.HAPPIER_CLI_SUBPROCESS_ENTRYPOINT = previousEntrypoint;
+        removeTempDirSync(happierHome);
+      }
+    },
+  );
 
   it('does not use the tool call id or a tool-name substring as authority', async () => {
     const session = new FakeSession();
