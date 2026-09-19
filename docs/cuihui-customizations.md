@@ -9,38 +9,27 @@ repository; see [Repository boundary for custom deployments](repository-boundary
 
 ## Source status
 
-The current follow-up documentation candidate is based on
-`282040453f75588a4a8864e9415248c40d671210`, the open PR #3 head. Relative to
-that source pin, this documentation migration changes no product source,
-package, test, build, or runtime file. PR #3 already contains the combined
-provider-autonomous continuation and daemon spawn-settlement changes.
-
-This page does not claim that PR #3 is merged, released, deployed, or accepted.
-It also does not claim that moving current documentation removes environment
-details from earlier public Git history.
-
 ### Unified source candidate (September 19, 2026)
 
 `release/unified-happier-arm64-20260919` is a source-only candidate branched
 from the exact `custom/cuihui` head
-`2e8026935c7ed412a5c43b9bdf1a4c8477d9fc02`. It combines two additions on top of
-that canonical head:
+`2e8026935c7ed412a5c43b9bdf1a4c8477d9fc02`. Product candidate
+`835b980c613b16e5724e36162784eff324d5d70f` has that commit as its direct
+parent, so it carries the maintained continuation, cancellation,
+completion/citation, Copilot steering, native-worker lifecycle, remote setup,
+and daemon spawn-compatibility behavior documented below.
 
-- the nonblocking delegation guidance in
-  `packages/protocol/src/prompts/executionRunsGuidanceV1.ts` and
-  `buildAppendSystemPromptBaseV1.ts`, with the matching
+The candidate adds two changes on top of that source line:
+
+- the five-file nonblocking-guidance overlay: the two prompt owners and their
+  tests under `packages/protocol/src/prompts/`, plus the matching
   `docs/cli-architecture.md` contract text;
 - Copilot GitHub connected-service authentication, described under
   [Copilot connected-service authentication](#copilot-connected-service-authentication).
 
-Every other behavior carried by the reconstructed laptop source
-`48d43accd4cfb2405877924224da7c7e2f96330c` was already present on the canonical
-head and was verified byte-identical or behavior-identical rather than
-re-applied.
-
 This is a candidate branch only. It is not merged, released, installed,
-deployed, or independently approved, and it does not change any running
-Happier service.
+deployed, built as a final artifact, live-validated across target machines, or
+independently approved. It does not change any running Happier service.
 
 ## Maintained behavior
 
@@ -74,7 +63,7 @@ yarn typecheck
 ### Copilot regular-session steering
 
 The Copilot ACP runtime enables the shared steering delivery path in
-`apps/cli/src/backends/copilot/acp/runtime.ts`. This is the accepted interim
+`apps/cli/src/backends/copilot/acp/runtime.ts`. This is the maintained interim
 behavior, not a claim of non-interrupting steering: live comparisons with
 Copilot CLI 1.0.86 found that a second `session/prompt` aborts the active task in
 both regular sessions and managed execution runs, even when Happier sends no
@@ -111,7 +100,7 @@ yarn workspace @happier-dev/cli test:copilot-steering
 
 Before deploying to another environment, repeat the disposable real-provider
 check and record runtime versions, actual cancellation behavior, replacement
-answer, completion events, and ordinary follow-up. The interim release accepts
+answer, completion events, and ordinary follow-up. The interim contract permits
 interruption; a future non-interrupting implementation must instead preserve the
 original task without lost output or duplicate completion.
 
@@ -412,14 +401,49 @@ artifact availability, exact pins, observed pointer state, and an independently
 validated recovery procedure. Public product documentation does not claim that
 any environment is rollback-ready.
 
+### Unified `darwin-arm64` artifact promotion
+
+After the unified source receives the required approvals, its operating contract
+is build once and deploy identical bytes:
+
+1. Freeze the exact final Git commit and build one immutable `darwin-arm64` CLI
+   artifact from that commit.
+2. Sign the artifact and record its checksum before distribution.
+3. Copy that same artifact to each approved target Mac. Verify its signature and
+   checksum before each installation; do not rebuild or modify it per machine.
+4. Install and validate each machine independently. Local credentials, settings,
+   and state remain local and are not copied between machines.
+
+Source approval does not establish artifact identity, and one successful
+installation does not establish another. The environment-specific deployment
+record must bind each installation to the final source commit and the one
+artifact checksum, then record machine-local validation separately.
+
+Rollback is not ready until the operator-controlled deployment record identifies
+the previous known-good immutable artifact and its checksum, confirms that it is
+available, records the currently installed artifact and daemon entrypoint, and
+contains an independently validated stop, install, restart, and acceptance
+procedure. The compatibility review must also confirm that rolling back the CLI
+does not require a state migration. Rollback must preserve each machine's local
+credentials, settings, and state rather than replacing them from another
+machine.
+
+No final artifact has been built, signed, checksummed, copied, or installed for
+this candidate. Deployment and rollback-readiness validation remain pending.
+Machine identities, exact artifact pins, installation results, and recovery
+evidence belong in the operator-controlled deployment repository described in
+[Repository boundary for custom deployments](repository-boundary.md).
+
 ## Experimental Copilot SDK runtime (opt-in)
 
-Verified on September 10, 2026 against candidate
-`952e5a6bec06f7006a51c4ce3867cc342e8f3475` (tree `8720128714`), which is **not
-merged into this branch**. This branch (`1ffa5f044c`) contains no SDK runtime.
-Everything below describes that candidate so operators can read the same rules
-the code enforces; it is not a statement that the candidate is released,
-independently reviewed, or at parity with ACP.
+The original authoring record was prepared on September 10, 2026 against
+candidate `952e5a6bec06f7006a51c4ce3867cc342e8f3475` (tree `8720128714`).
+That candidate and the later operator-route and observability changes are
+ancestors of the `custom/cuihui` base used by the unified candidate, so the
+unified source contains the SDK runtime described below. The historical
+author-side evidence remains scoped to its recorded candidate; ancestry does
+not make it current validation or show that the runtime is released, deployed,
+independently approved, or at parity with ACP.
 
 ### What this is, and what it is not
 
@@ -507,11 +531,11 @@ this experiment, no per-user or per-account scoping, and no entry in the
 canonical feature catalog. Do not describe the experiment as a user-facing
 setting.
 
-### Persistent daemon operator route (current release source)
+### Persistent daemon operator route (current source)
 
-The current release source adds a persisted operator route for the background
-service. This is a newer source basis than candidate `952e5a6b`; do not read it
-back into that candidate.
+The unified source includes a persisted operator route for the background
+service. It entered the source line after candidate `952e5a6b`, so do not read
+this later behavior back into that historical candidate.
 
 - Use an installed Happier binary that already includes the
   `service copilot-sdk-experiment` command and the service-definition refresh
@@ -555,9 +579,9 @@ Current source basis for this operator route: `apps/cli/src/cli/commands/service
 
 ### Observing which backend a session selected
 
-The older `952e5a6b` references below are historical. In the current unreleased
-PR7 source candidate `98700c78` (not already deployed by this document), the
-selection and native-error observability path changed:
+The older `952e5a6b` references below are historical. The selection and
+native-error observability path changed in later source candidate `98700c78`,
+which is also an ancestor of the unified base:
 
 - The resolved selection is logged as
   `[copilot] runtime selection resolved kind=<acp|sdk> affinity=<acp|sdk|none> origin=<created|existing|unknown>`
