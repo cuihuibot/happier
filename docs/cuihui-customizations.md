@@ -27,9 +27,11 @@ The candidate adds two changes on top of that source line:
 - Copilot GitHub connected-service authentication, described under
   [Copilot connected-service authentication](#copilot-connected-service-authentication).
 
-This is a candidate branch only. It is not merged, released, installed,
-deployed, built as a final artifact, live-validated across target machines, or
-independently approved. It does not change any running Happier service.
+At initial authoring on September 19, 2026, this was a candidate branch awaiting
+merge, release, and independent approval. That timestamped source status does
+not assert current artifact, installation, deployment, or machine-validation
+state; those transient facts belong in the operator-controlled deployment
+record.
 
 ## Maintained behavior
 
@@ -152,8 +154,10 @@ yarn vitest run \
 yarn typecheck
 ```
 
-This behavior is development-source only. It has not been included in a
-published release, and no machine was updated to obtain it.
+At initial authoring on September 19, 2026, this behavior was
+development-source only and had not been included in a published release.
+Current publication and machine-rollout status belongs in the
+operator-controlled deployment record.
 
 ### Provider-autonomous continuation
 
@@ -428,10 +432,11 @@ does not require a state migration. Rollback must preserve each machine's local
 credentials, settings, and state rather than replacing them from another
 machine.
 
-No final artifact has been built, signed, checksummed, copied, or installed for
-this candidate. Deployment and rollback-readiness validation remain pending.
-Machine identities, exact artifact pins, installation results, and recovery
-evidence belong in the operator-controlled deployment repository described in
+Artifact build, signing, checksum, copy, installation, deployment, validation,
+and rollback-readiness status are transient operator facts rather than reusable
+product contracts. Machine identities, exact artifact pins, installation
+results, and recovery evidence belong in the operator-controlled deployment
+repository described in
 [Repository boundary for custom deployments](repository-boundary.md).
 
 ## Experimental Copilot SDK runtime (opt-in)

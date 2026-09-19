@@ -28,6 +28,11 @@ artifact hashes, private routes, or user-session history.
 The deployment repository may link an immutable public source commit. It must
 not become a copy of the product workspace or product history.
 
+Official documentation lives in the versioned repository and published
+documentation corpus. A CLI release archive is a product payload, so the
+absence of these pages from that archive is not evidence that documentation is
+missing.
+
 ## Information that is never committed
 
 A private repository is not a secret store. Do not commit:
