@@ -1,5 +1,6 @@
 import { createCatalogCliAuthSpec } from '@/capabilities/cliAuth/createCatalogCliAuthSpec';
 import { resolveCommonApiKeyStatus, runCliCommandBestEffort } from '@/capabilities/cliAuth/shared';
+import { COPILOT_GITHUB_TOKEN_ENV_KEYS } from '@/backends/copilot/auth/copilotGithubTokenEnv';
 import type { CliAuthSpec } from '@/backends/types';
 
 const DEFAULT_COPILOT_CLI_AUTH_PROBE_TIMEOUT_MS = 1_500;
@@ -32,7 +33,7 @@ async function readGhAuthTokenStatus(): Promise<Readonly<{
 
 export const copilotCliAuthSpec: CliAuthSpec = createCatalogCliAuthSpec('copilot', {
   detectAuthStatus: async () => {
-    const envStatus = resolveCommonApiKeyStatus(['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN']);
+    const envStatus = resolveCommonApiKeyStatus([...COPILOT_GITHUB_TOKEN_ENV_KEYS]);
     if (envStatus.state === 'logged_in') {
       return envStatus;
     }

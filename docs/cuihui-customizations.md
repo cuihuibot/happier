@@ -19,6 +19,29 @@ This page does not claim that PR #3 is merged, released, deployed, or accepted.
 It also does not claim that moving current documentation removes environment
 details from earlier public Git history.
 
+### Unified source candidate (September 19, 2026)
+
+`release/unified-happier-arm64-20260919` is a source-only candidate branched
+from the exact `custom/cuihui` head
+`2e8026935c7ed412a5c43b9bdf1a4c8477d9fc02`. It combines two additions on top of
+that canonical head:
+
+- the nonblocking delegation guidance in
+  `packages/protocol/src/prompts/executionRunsGuidanceV1.ts` and
+  `buildAppendSystemPromptBaseV1.ts`, with the matching
+  `docs/cli-architecture.md` contract text;
+- Copilot GitHub connected-service authentication, described under
+  [Copilot connected-service authentication](#copilot-connected-service-authentication).
+
+Every other behavior carried by the reconstructed laptop source
+`48d43accd4cfb2405877924224da7c7e2f96330c` was already present on the canonical
+head and was verified byte-identical or behavior-identical rather than
+re-applied.
+
+This is a candidate branch only. It is not merged, released, installed,
+deployed, or independently approved, and it does not change any running
+Happier service.
+
 ## Maintained behavior
 
 ### Copilot completion persistence
@@ -95,6 +118,53 @@ original task without lost output or duplicate completion.
 Rollout requires rebuilding and updating the Happier CLI on each target machine,
 updating version-pinned daemon entrypoints, and starting fresh or restarted
 session runners. This PR does not itself update running machines.
+
+### Copilot connected-service authentication
+
+Copilot advertises the `github` connected service with the `token` kind only.
+When a GitHub token profile is selected for a new session, Happier materializes
+exactly one environment key, `COPILOT_GITHUB_TOKEN`, into the spawned Copilot
+process. Nothing is written to disk, and the token value is not persisted in
+session metadata.
+
+- No profile selection keeps Copilot on its native authentication: ambient
+  `GH_TOKEN`/`GITHUB_TOKEN`, local `gh auth token`, or stored Copilot
+  credentials. The materializer returns `null` rather than projecting a key.
+- A non-token GitHub credential fails closed through
+  `requireConnectedServiceTokenCredentialRecord`; Happier does not silently fall
+  back to another credential.
+- `COPILOT_GITHUB_TOKEN_ENV_KEYS` in
+  `apps/cli/src/backends/copilot/auth/copilotGithubTokenEnv.ts` is the single
+  owner of the GitHub token key order. Both local auth detection and the
+  connected-service projection read it, so detection and materialization cannot
+  drift apart.
+- Writing only the highest-precedence key lets a selected profile win over
+  ambient variables and stored Copilot credentials without rewriting the
+  environment that `gh` reads.
+
+The key order is anchored to GitHub Copilot CLI 1.0.86 `copilot help
+environment`.
+
+Primary implementation:
+
+- `apps/cli/src/backends/copilot/auth/copilotGithubTokenEnv.ts`
+- `apps/cli/src/backends/copilot/connectedServices/createCopilotConnectedServicesMaterializer.ts`
+- `apps/cli/src/backends/copilot/index.ts`
+- `packages/agents/src/manifest.ts`
+
+Focused regression:
+
+```bash
+cd apps/cli
+yarn vitest run \
+  src/backends/copilot/connectedServices/createCopilotConnectedServicesMaterializer.test.ts \
+  src/session/actions/options/spawnConnectedServiceDiscovery.test.ts \
+  src/backends/copilot/cli/auth/copilotCliAuthSpec.test.ts
+yarn typecheck
+```
+
+This behavior is development-source only. It has not been included in a
+published release, and no machine was updated to obtain it.
 
 ### Provider-autonomous continuation
 

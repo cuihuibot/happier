@@ -33,7 +33,7 @@ Happier models different credential types as distinct connected services:
 
 This split is intentional. Subscription auth and API-key auth have different provider behavior, billing paths, and backend materialization requirements, so Happier does not merge them into a single generic "Claude" or "OpenAI" credential type.
 
-GitHub is the first connected service that is not an agent/backend credential. It is used by source-control features such as GitHub repository publishing and GitHub pull request operations.
+GitHub tokens can be used by source-control features such as repository publishing and pull request operations. A selected GitHub token profile can also authenticate new Copilot sessions.
 
 ## Where you manage them
 
@@ -154,6 +154,17 @@ A connected GitHub token lets Happier use GitHub REST APIs for:
 - listing and opening pull requests for the current branch
 - creating or reusing pull requests
 
+It can also authenticate Copilot:
+
+- choose a connected GitHub token profile when starting a Copilot session
+- Happier provides that token to the new Copilot process as `COPILOT_GITHUB_TOKEN`
+- the token value is not stored in session metadata
+
+<Callout type="info">
+  Copilot connected-service support is currently available only in development
+  builds. It has not been included in a published release yet.
+</Callout>
+
 The local `gh` CLI is not stored as a connected service. If `gh` is already installed and authenticated with `gh auth login`, Happier can use it as an optional fallback for GitHub source-control workflows.
 
 Current GitHub OAuth note:
@@ -178,13 +189,14 @@ Connected services are not global "works everywhere" credentials. Each backend d
 | Gemini | `gemini` (OAuth) |
 | OpenCode | `openai-codex` (OAuth), `openai` (API key), `claude-subscription` (setup-token only), `anthropic` (API key) |
 | Pi | `openai-codex` (OAuth), `openai` (API key), `claude-subscription` (OAuth or setup-token), `anthropic` (API key) |
+| Copilot | `github` (token) |
 
 Important limitations:
 
 - OpenCode accepts `claude-subscription` only when the profile is a setup-token profile, not a Claude OAuth profile.
 - Pi accepts `claude-subscription` OAuth and setup-token profiles. Claude subscription OAuth is materialized into Pi's isolated `auth.json`; setup-token profiles are materialized as Pi API-key credentials.
 - `anthropic` is API-key only in Happier.
-- `github` is not consumed by agent backends. It is consumed by source-control workflows.
+- Copilot accepts `github` token profiles only. GitHub OAuth credentials are not supported in this build.
 
 ## Source-control compatibility
 

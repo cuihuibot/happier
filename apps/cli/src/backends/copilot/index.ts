@@ -13,6 +13,9 @@ export const agent = {
   getCliCapabilityOverride: async () => (await import('@/backends/copilot/cli/capability')).cliCapability,
   getCliDetect: async () => (await import('@/backends/copilot/cli/detect')).cliDetect,
   getCliAuthSpec: async () => (await import('@/backends/copilot/cli/auth/copilotCliAuthSpec')).copilotCliAuthSpec,
+  getConnectedServiceMaterializer: async () =>
+    (await import('@/backends/copilot/connectedServices/createCopilotConnectedServicesMaterializer'))
+      .createCopilotConnectedServicesMaterializer(),
   vendorResumeSupport: AGENTS_CORE.copilot.resume.vendorResume,
   getAcpBackendFactory: async () => {
     const { createCopilotBackend } = await import('@/backends/copilot/acp/backend');

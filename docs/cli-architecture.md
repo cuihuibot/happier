@@ -480,6 +480,22 @@ resolved block. Guidance-off and feature-off preserve their existing behavior.
 Only fresh parents receive changed guidance. Current user instructions and enforced
 permissions remain above the preference.
 
+The development guidance includes the existing account completion-notification
+default at prompt creation. When enabled, it defaults managed launches to
+nonblocking observation and directs the parent to inspect the stored result after
+a completion notification; when disabled or unconfirmed, it keeps bounded
+observation instead of assuming that a notification will arrive.
+Having no independent work, needing the eventual reply, or observing a running
+worker does not justify blocking: yield the turn and defer dependent work until
+the notification. Bounded waits remain available for explicit synchronous
+requests, tests of waiting, disabled/unconfirmed notifications, or concrete
+delivery problems. An enabled default establishes the normal notification path;
+a pending result alone is not evidence of a delivery problem. This is prompt
+guidance, not a notification watchdog or a change to run lifetime. After steering
+interrupts an observation, the parent must inspect the same run; the wait is not
+guaranteed to resume automatically. The shared policy is owned by
+`packages/protocol/src/prompts/executionRunsGuidanceV1.ts` for both routing modes.
+
 A `subagents.delegate.start` or `subagents.plan.start` request must provide either
 `profileId` or a nonempty `backendTargetKeys` selection. Low-level
 `execution.run.start` uses `backendTarget` instead of `backendTargetKeys`.
