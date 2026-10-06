@@ -48,7 +48,6 @@ import {
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
     readPersistedSessionListWarmCacheEntries,
-    resolveWarmCacheAccountScope,
     saveSessionListWarmCacheEntries,
 } from '../../domains/state/warmCachePersistence';
 import {
@@ -70,7 +69,6 @@ import {
     SESSION_RESUMING_PRESENTATION_TIMEOUT_MS,
 } from '../../domains/session/attention/deriveSessionRuntimePresentationState';
 import { setActiveServerSessionListCache } from '../sessionListCache';
-import { getActiveServerSnapshot } from '../../domains/server/serverRuntime';
 import { areScmWorkingSnapshotsEquivalentIgnoringFetchedAt } from '@/scm/sync/snapshotDiff';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import type { SessionActionDraft } from '@/sync/domains/sessionActions/sessionActionDraftTypes';
@@ -93,6 +91,7 @@ import {
     planSessionListRenderableReplacementCommit,
     refreshSessionListViewDataRowsForRenderables,
     shouldRebuildOnSessionPlacementFieldsChange,
+    type SessionListRenderableReplacementOptions,
 } from './sessionListRenderableCommit';
 import { clearAgentInputLocalUiStateForSession } from '@/sync/domains/input/draftValues/agentInputLocalUiStateStore';
 import { deleteSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
@@ -164,7 +163,10 @@ export type SessionsDomain = {
     clearSessionLocalStateScope: () => void;
     getActiveSessions: () => Session[];
     applySessions: (sessions: (Omit<Session, 'presence'> & { presence?: 'online' | number })[]) => void;
-    replaceSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
+    replaceSessionListRenderables: (
+        sessions: SessionListRenderableSession[],
+        options?: SessionListRenderableReplacementOptions,
+    ) => void;
     mergeSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
     applySessionListRenderablePatches: (
         patches: ReadonlyArray<Readonly<{
@@ -459,17 +461,22 @@ function resolveSessionOnlineState(session: { active: boolean; activeAt: number 
  * reconstruction of the previous renderables. Boot hydration therefore produces the
  * record that is already on disk and writes nothing, and steady-state saves skip both
  * the serialization and the storage write when nothing the cache keeps has changed.
+ *
+ * The key is the scope the rows in state actually belong to, never the mutable relay
+ * selection: choosing another relay flips the active-server snapshot before the sync
+ * runtime resets the session scope, so a save taken in that window would otherwise
+ * relabel the previous relay's list as the newly selected relay's cache. A state with
+ * no owning scope (pre-auth, or after a scope reset) has no cache to write to.
  */
 function saveWarmSessionCacheForState(state: SessionsDomain & SessionsDomainDependencies): void {
-    const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
-    const accountId = resolveWarmCacheAccountScope(state.profile?.id);
-    if (!activeServerId || !accountId) return;
-    const previousEntries = readPersistedSessionListWarmCacheEntries(activeServerId, accountId);
+    const scope = state.sessionLocalStateScope;
+    if (!scope) return;
+    const previousEntries = readPersistedSessionListWarmCacheEntries(scope.serverId, scope.accountId);
     const nextEntries = buildPersistedSessionListCacheEntriesFromRenderables(state.sessionListRenderables ?? {}, previousEntries);
     if (previousEntries && nextEntries === previousEntries) return;
     saveSessionListWarmCacheEntries(
-        activeServerId,
-        accountId,
+        scope.serverId,
+        scope.accountId,
         nextEntries,
     );
 }
@@ -1307,16 +1314,19 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return nextState;
             }),
         ),
-        replaceSessionListRenderables: (sessions) => set((state) => {
+        replaceSessionListRenderables: (sessions, options) => set((state) => {
+            const coversEntireList = options?.coversEntireList === true;
             const plan = planSessionListRenderableReplacementCommit({
                 state,
                 incomingRenderables: sessions,
+                coversEntireList,
             });
             syncPerformanceTelemetry.count('sync.store.sessions.renderables.replace', {
                 incoming: sessions.length,
                 previous: Object.keys(state.sessionListRenderables ?? {}).length,
                 changed: plan.changedCount,
                 removed: plan.removedCount,
+                coversEntireList: coversEntireList ? 1 : 0,
                 noop: plan.noop ? 1 : 0,
                 listRebuild: plan.needsSessionListViewDataRebuild ? 1 : 0,
                 listViewFieldChanges: plan.listViewFieldChangeCount,

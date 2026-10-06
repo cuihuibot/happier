@@ -1262,7 +1262,10 @@ export async function fetchAndApplySessions(params: {
     request?: (path: string, init: RequestInit) => Promise<Response>;
     applySessions: (sessions: HydratedSession[]) => void;
     onSnapshotFetched?: (sessionIds: string[]) => void;
-    applySessionListRenderables?: (sessions: SessionListRenderableSession[], options?: { replace?: boolean }) => void;
+    applySessionListRenderables?: (
+        sessions: SessionListRenderableSession[],
+        options?: { replace?: boolean; coversEntireList?: boolean },
+    ) => void;
     cachedSessionListEntries?: Record<string, SessionListCacheEntryV1>;
     getCurrentSessionListRenderable?: CurrentSessionListRenderableLookup;
     applySessionListRenderablePatches?: (patches: readonly SessionListRenderablePatch[]) => void;
@@ -1326,6 +1329,13 @@ export async function fetchAndApplySessions(params: {
     let fetchedPages = 0;
     let nextCursorForMore: string | null = cursor;
     let hasNextForMore = false;
+    // `hasNextForMore` answers "can another page be fetched", which also depends on a usable
+    // cursor and treats a missing pagination declaration as `false`. Whether the listing is
+    // exhausted is a different question, answered only by the server actually declaring
+    // `hasNext: false` on the wire (`declaredEndOfList`): a page that reports a next page it
+    // cannot hand us a cursor for — or that declares nothing at all — is an unknown
+    // remainder, never an exhausted listing.
+    let reachedListingEnd = false;
     let source: 'v2' | 'v1' = 'v2';
     const buildFetchResult = (): SessionListFetchResult => ({
         sessionIds: sessions.map((session) => session.id),
@@ -1397,6 +1407,7 @@ export async function fetchAndApplySessions(params: {
                 nextCursor = page.nextCursor;
                 nextCursorForMore = page.nextCursor;
                 hasNextForMore = page.hasNext === true && typeof page.nextCursor === 'string' && page.source === 'v2';
+                reachedListingEnd = page.source === 'v2' && page.declaredEndOfList === true;
             },
         );
 
@@ -1490,6 +1501,16 @@ export async function fetchAndApplySessions(params: {
             )),
         );
         appliedRenderableCount = renderables.length;
+        // The response is authoritative about the whole unarchived listing only when it
+        // started at the list head, is not a different listing (archived), and the server
+        // declared the listing exhausted on the wire: the store may then evict unarchived
+        // rows it omits instead of keeping them as rows a page merely did not reach.
+        // Anything unknown — a next page without a usable cursor, a response that omits the
+        // pagination declaration, a repeated cursor, a page budget cut short, a v1
+        // response — stays non-authoritative.
+        const coversEntireList = !(params.sessionListCursor ?? null)
+            && !params.sessionListPath
+            && reachedListingEnd;
         const staleMetadataPreservedRows = countStaleMetadataPreservedRows(
             renderables,
             params.getCurrentSessionListRenderable,
@@ -1501,7 +1522,7 @@ export async function fetchAndApplySessions(params: {
                 requiredRows: requiredSnapshotRows,
                 backgroundRows: countBackgroundRows(renderables.length, requiredSnapshotRows),
             },
-            () => params.applySessionListRenderables!(renderables, { replace: true }),
+            () => params.applySessionListRenderables!(renderables, { replace: true, coversEntireList }),
         );
         recordFirstUsableListTelemetry({
             snapshotStartedAtMs,

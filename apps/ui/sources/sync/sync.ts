@@ -4083,13 +4083,15 @@ class Sync {
             getCurrentSessionListRenderable: (sessionId) => storage.getState().sessionListRenderables[sessionId] ?? null,
             cachedSessionListEntries,
             shouldContinue,
-            applySessionListRenderables: (sessions) => {
+            applySessionListRenderables: (sessions, options) => {
                 if (!shouldContinue()) return;
                 if (isAppend) {
                     storage.getState().mergeSessionListRenderables(sessions);
                     return;
                 }
-                storage.getState().replaceSessionListRenderables(sessions);
+                storage.getState().replaceSessionListRenderables(sessions, {
+                    coversEntireList: options?.coversEntireList === true,
+                });
             },
             applySessionListRenderablePatches: (patches) => {
                 if (!shouldContinue()) return;

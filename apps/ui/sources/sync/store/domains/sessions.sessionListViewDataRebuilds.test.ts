@@ -95,6 +95,9 @@ function createHarness(createSessionsDomain: any, initialState: Record<string, a
         machineDisplayById: {},
         sessionMessages: {},
         profile: { id: 'account_a' },
+        // Warm-cache writes are owned by the active session-local scope, which the real
+        // boot order activates before any list rows are published.
+        sessionLocalStateScope: { serverId: 'server_1', accountId: 'account_a' },
         settings: { groupInactiveSessionsByProject: false },
         ...initialState,
     };
