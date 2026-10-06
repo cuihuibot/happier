@@ -377,6 +377,14 @@ export async function fetchSessionListPageCompat(params: Readonly<{
     hasNext: boolean;
     source: 'v2' | 'v1';
     includedActiveRows: boolean;
+    /**
+     * The server actually declared `hasNext: false` on the wire. `hasNext` above is the
+     * normalized pagination answer, which coerces a missing or invalid declaration to
+     * `false` so older/compatible payloads keep paging correctly; a payload that never
+     * declared anything is an unknown remainder, not an exhausted listing, so only this
+     * marker may be read as end-of-list.
+     */
+    declaredEndOfList: boolean;
 }> {
     const sessionListPath = params.sessionListPath || '/v2/sessions';
     const url = new URL(sessionListPath, 'http://placeholder.local');
@@ -417,6 +425,8 @@ export async function fetchSessionListPageCompat(params: Readonly<{
                 hasNext: parsed.hasNext === true,
                 source: 'v2',
                 includedActiveRows: parsed.includedActive === true,
+                // Read from the raw body, before the missing-declaration coercion above.
+                declaredEndOfList: isRecord(v2Body) && v2Body.hasNext === false,
             };
         }
     } else if (!isV2SessionsListRoute(sessionListPath) || !looksLikeMissingV2SessionsListRoute(v2Response.status, v2Body)) {
@@ -452,6 +462,7 @@ export async function fetchSessionListPageCompat(params: Readonly<{
         hasNext: false,
         source: 'v1',
         includedActiveRows: false,
+        declaredEndOfList: false,
     };
 }
 

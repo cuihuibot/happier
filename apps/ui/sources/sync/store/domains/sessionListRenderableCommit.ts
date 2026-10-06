@@ -177,16 +177,36 @@ export function buildSessionListViewDataForRenderableState(
     });
 }
 
+export type SessionListRenderableReplacementOptions = Readonly<{
+    /**
+     * The response reached the end of the listing from its head, so every unarchived row
+     * it omits is genuinely gone rather than merely unreached. Absent or `false` keeps the
+     * paginated behavior: only the range the response covers is replaced.
+     */
+    coversEntireList?: boolean;
+}>;
+
 export function planSessionListRenderableReplacementCommit(input: Readonly<{
     state: SessionListRenderableCommitState;
     incomingRenderables: ReadonlyArray<SessionListRenderableSession>;
+    /** See {@link SessionListRenderableReplacementOptions.coversEntireList}. */
+    coversEntireList?: boolean;
 }>): SessionListRenderableStoreUpdatePlan {
+    // An incomplete response with no rows covers no range at all, so it is no evidence that
+    // the known-good list is gone. It commits through the merge planner, which adds nothing
+    // and removes nothing while still initializing an uninitialized list view.
+    if (input.coversEntireList !== true && input.incomingRenderables.length === 0) {
+        return planSessionListRenderableMergeCommit(input);
+    }
     return planSessionListRenderableReplacement({
         previousRenderables: input.state.sessionListRenderables ?? {},
         incomingRenderables: input.incomingRenderables,
         // A replacement response replaces the range it covers, not the whole store: rows
-        // the user paged in below that range survive the refresh.
-        removalWindow: resolveSessionListRenderableRemovalWindow(input.incomingRenderables),
+        // the user paged in below that range survive the refresh. A complete response
+        // covers everything, so it carries no window at all.
+        removalWindow: input.coversEntireList === true
+            ? null
+            : resolveSessionListRenderableRemovalWindow(input.incomingRenderables),
         isSessionListViewDataUninitialized: input.state.sessionListViewData === null,
         rebuildOnAttentionPromotionFieldsChange:
             shouldRebuildOnSessionPlacementFieldsChange(input.state.settings),
