@@ -202,6 +202,9 @@ async function hydrateWarmCacheIntoDomain(domain: any) {
     await prepareWarmCacheEncryptionKey();
     const { loadSessionListWarmCacheEntries } = await import('../../domains/state/warmCachePersistence');
     const { buildSessionListRenderableFromCacheEntry } = await import('../../domains/state/warmCacheAdapters');
+    // Boot activates the session scope that owns the rows before it publishes them, and the
+    // warm cache is keyed by that scope.
+    domain.activateSessionLocalStateScope({ serverId: SERVER_ID, accountId: ACCOUNT_ID });
     const entries = loadSessionListWarmCacheEntries(SERVER_ID, ACCOUNT_ID);
     domain.replaceSessionListRenderables(
         Object.values(entries).map((entry) => buildSessionListRenderableFromCacheEntry(entry)),

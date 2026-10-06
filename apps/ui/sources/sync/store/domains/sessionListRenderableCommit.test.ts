@@ -5,6 +5,7 @@ import type { SessionListRenderableSession } from '../../domains/session/listing
 import {
     applySessionListRenderableCommitPlan,
     planSessionListRenderablePatchesCommit,
+    planSessionListRenderableReplacementCommit,
     type SessionListRenderableCommitState,
 } from './sessionListRenderableCommit';
 
@@ -159,5 +160,84 @@ describe('sessionListRenderableCommit', () => {
         expect(next.sessionListViewData).toBe(activeListViewData);
         expect(next.sessionListViewDataByServerId.server_active).toBe(activeListViewData);
         expect(next.sessionListViewDataByServerId.server_target).toBe(rebuiltTargetListViewData);
+    });
+
+    describe('complete session-list responses', () => {
+        // Ordered newest-first, as the server emits them.
+        const head = makeRenderable('s_head', { meaningfulActivityAt: 1_000, createdAt: 1_000 });
+        const stale = makeRenderable('s_stale', { meaningfulActivityAt: 100, createdAt: 100 });
+        const archived = makeRenderable('s_archived', {
+            meaningfulActivityAt: 50,
+            createdAt: 50,
+            archivedAt: 60,
+        });
+
+        function makeReplacementState(
+            renderables: ReadonlyArray<SessionListRenderableSession>,
+        ): SessionListRenderableCommitState {
+            return {
+                sessions: {},
+                sessionListRenderables: Object.fromEntries(renderables.map((entry) => [entry.id, entry])),
+                sessionListViewData: [],
+                sessionListViewDataByServerId: {},
+                machines: {},
+                machineDisplayById: {},
+                settings: { groupInactiveSessionsByProject: false },
+            };
+        }
+
+        it('evicts unarchived rows the complete response omits', () => {
+            const plan = planSessionListRenderableReplacementCommit({
+                state: makeReplacementState([head, stale]),
+                incomingRenderables: [head],
+                coversEntireList: true,
+            });
+
+            expect(plan.removedSessionIds).toEqual(['s_stale']);
+            expect(plan.nextRenderables.s_head).toBeDefined();
+        });
+
+        it('keeps archived rows a complete unarchived listing never carries', () => {
+            const plan = planSessionListRenderableReplacementCommit({
+                state: makeReplacementState([head, stale, archived]),
+                incomingRenderables: [head],
+                coversEntireList: true,
+            });
+
+            expect(plan.removedSessionIds).toEqual(['s_stale']);
+            expect(plan.nextRenderables.s_archived).toBe(archived);
+        });
+
+        it('keeps paged-in rows below the range an incomplete response covers', () => {
+            const plan = planSessionListRenderableReplacementCommit({
+                state: makeReplacementState([head, stale]),
+                incomingRenderables: [head],
+                coversEntireList: false,
+            });
+
+            expect(plan.removedSessionIds).toEqual([]);
+            expect(plan.nextRenderables.s_stale).toBe(stale);
+        });
+
+        it('treats an absent completeness flag as the paginated response it already was', () => {
+            const plan = planSessionListRenderableReplacementCommit({
+                state: makeReplacementState([head, stale]),
+                incomingRenderables: [head],
+            });
+
+            expect(plan.removedSessionIds).toEqual([]);
+            expect(plan.nextRenderables.s_stale).toBe(stale);
+        });
+
+        it('clears every unarchived row for a complete empty response', () => {
+            const plan = planSessionListRenderableReplacementCommit({
+                state: makeReplacementState([head, stale, archived]),
+                incomingRenderables: [],
+                coversEntireList: true,
+            });
+
+            expect([...plan.removedSessionIds].sort()).toEqual(['s_head', 's_stale']);
+            expect(plan.nextRenderables.s_archived).toBe(archived);
+        });
     });
 });

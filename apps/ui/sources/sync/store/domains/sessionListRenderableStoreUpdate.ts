@@ -341,7 +341,10 @@ export function planSessionListRenderableReplacement(input: Readonly<{
         ...input,
         shouldRemoveOmittedPreviousRenderable: removalWindow
             ? (previous) => isRenderableInsideRemovalWindow(previous, removalWindow)
-            : () => true,
+            // A response covering the whole list is authoritative about the unarchived
+            // listing only. An archived row is never carried by that listing, so its
+            // absence is not an omission; archiving and deletion keep their own signals.
+            : (previous) => (previous.archivedAt ?? null) === null,
     });
 }
 

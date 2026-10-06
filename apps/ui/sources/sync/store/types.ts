@@ -18,6 +18,7 @@ import type { AccountSettingsScope } from '../domains/settings/scope/accountSett
 import type { ServerAccountScope } from '../domains/scope/serverAccountScope';
 import type { SessionListViewItem } from '../domains/session/listing/sessionListViewData';
 import type { SessionListRenderableSession } from '../domains/session/listing/sessionListRenderable';
+import type { SessionListRenderableReplacementOptions } from './domains/sessionListRenderableCommit';
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
 import type { CustomerInfo } from '../domains/purchases/types';
 import type { ApplyMachinesOptions } from './domains/machines';
@@ -96,7 +97,10 @@ export interface SessionsDomainSlice {
     activateSessionLocalStateScope: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
     clearSessionLocalStateScope: () => void;
     applySessions: (sessions: (Omit<Session, 'presence'> & { presence?: 'online' | number })[]) => void;
-    replaceSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
+    replaceSessionListRenderables: (
+        sessions: SessionListRenderableSession[],
+        options?: SessionListRenderableReplacementOptions,
+    ) => void;
     mergeSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
     applySessionListRenderablePatches: (
         patches: ReadonlyArray<Readonly<{
