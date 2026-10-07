@@ -6,7 +6,7 @@ Happier separates issue evidence transport, triage routing, deep diagnosis, GitH
 
 | Concern | Canonical owner |
 | --- | --- |
-| Public issue reads, first-order relationship discovery, and explicitly authorized GitHub writes | `.agents/skills/happier-github-ops` through `yarn ghops` |
+| Public issue reads, first-order relationship discovery, and explicitly authorized GitHub writes | `.agents/skills/happier-github-ops` selects the authentication route |
 | Private issue/report context, diagnostic artifacts, and reproduction-stack mechanics | private `hmaint` and maintainer MCP |
 | Bug-report submission and candidate similar-issue retrieval | bug-report service and `packages/protocol/src/bugReports/*` |
 | Issue normalization, relationship analysis, clustering, and diagnosis topology | `.agents/skills/happier-issue-triage` |
@@ -144,7 +144,7 @@ Use the `v0.3` milestone for issues intentionally targeted to the 0.3 release/ro
 
 Respond as a grateful project collaborator, not a status bot. If the thread does not already contain a project thank-you, thank the author naturally for taking the time to report the issue. When a report or comment contributed a useful reproduction detail, diagnostic insight, or fix direction, name that contribution and how it helped. Do not repeat a ceremonial thank-you in every update, and do not let appreciation imply that an unverified diagnosis has been accepted.
 
-Every agent-authored public issue comment ends with a standalone `cc: @<local-gh-login>` line. Resolve that login with the machine's ordinary authenticated `gh` account (`gh api user --jq .login`), never with bot-authenticated `yarn ghops`. Under exact authorization, resolve it before the mutation preview; under standing authorization, resolve it immediately before posting. `ghops` remains the transport for issue reads and authorized writes; it is not the maintainer identity to mention. Do not hardcode a username or substitute the repository owner, operating-system user, Git author, or bot. If the local login cannot be resolved, ask the user to authenticate or explicitly supply the mention target before posting.
+Every agent-authored public issue comment ends with a standalone `cc: @<local-gh-login>` line. Resolve that login with the machine's ordinary authenticated `gh` account (`gh api user --jq .login`), never with bot-authenticated `yarn ghops`. Under exact authorization, resolve it before the mutation preview; under standing authorization, resolve it immediately before posting. Follow `.agents/skills/happier-github-ops` for the operation's authentication route; an explicitly selected bot transport does not determine the maintainer identity to mention. Do not hardcode a username or substitute the repository owner, operating-system user, Git author, or bot. If the local login cannot be resolved, ask the user to authenticate or explicitly supply the mention target before posting.
 
 The direct mention keeps the local maintainer participating in the conversation. Under exact authorization it must be part of the complete previewed comment; under standing authorization it remains required in the generated comment without a per-comment preview. Do not infer that an earlier mention or subscription makes the line optional. This does not apply to issue bodies or the release workflows' label-only reconciliation.
 
