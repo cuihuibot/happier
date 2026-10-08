@@ -2,15 +2,123 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHandler';
-import { createBasicSessionClient } from '@/testkit/backends/sessionFixtures';
+import { createBasicSessionClient, createBasicSessionClientWithOverrides } from '@/testkit/backends/sessionFixtures';
 import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBackend';
+import { createDeferred } from '@/testkit/async/deferred';
 import type { PromptResponse } from '@agentclientprotocol/sdk';
-import { AcpPromptSubmissionPhaseError } from '@/agent/acp/AcpBackend';
+import { AcpPromptSubmissionPhaseError, type AcpPromptSubmissionEvidence } from '@/agent/acp/AcpBackend';
+import type { AcpTurnOutcome } from '@/agent/acp/backend/turn/_types';
+import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
+import { isAbortLikeError, markTurnFailure } from '@/agent/executionRuns/runtime/turnDelivery';
 import { ProviderPromptSubmissionRejectedBeforeEffectError } from '@/agent/runtime/providerPromptSubmission';
 
 import { createTestAcpRuntime as createAcpRuntime } from '@/testkit/backends/acpRuntime';
 
 describe('createAcpRuntime Standard ACP provider-input acceptance contract', () => {
+  it.each(['submission', 'completion', 'cancelled-outcome', 'submitted-callback', 'compact'] as const)(
+    "does not apply a cancelled prompt's late %s settlement to its replacement",
+    async (stage) => {
+      const oldSubmission = createDeferred<AcpPromptSubmissionEvidence>();
+      const oldCompletion = createDeferred<AcpTurnOutcome>();
+      const oldCallback = createDeferred();
+      const oldStarted = createDeferred();
+      const sent: ACPMessageData[] = [];
+      const accepted: string[] = [];
+      let submissions = 0;
+      let completions = 0;
+      const backend = {
+        ...createFakeAcpRuntimeBackend(),
+        compactContext: async () => {
+          oldStarted.resolve();
+          await oldCallback.promise;
+        },
+        sendPromptWithEvidence: async (): Promise<AcpPromptSubmissionEvidence> => {
+          if (++submissions === 1 && stage === 'submission') {
+            oldStarted.resolve();
+            return oldSubmission.promise;
+          }
+          return { kind: 'exact_final_response', response: { stopReason: 'end_turn' } };
+        },
+        waitForResponseComplete: async (): Promise<AcpTurnOutcome> => {
+          if (++completions === 1 && (stage === 'completion' || stage === 'cancelled-outcome')) {
+            oldStarted.resolve();
+            return oldCompletion.promise;
+          }
+          return { kind: 'completed', stopReason: 'end_turn' };
+        },
+      };
+      const runtime = createAcpRuntime({
+        provider: 'customAcp',
+        directory: '/tmp',
+        session: createBasicSessionClientWithOverrides({
+          sendAgentMessage: (_provider, body) => { sent.push(body); },
+        }),
+        messageBuffer: new MessageBuffer(),
+        mcpServers: {},
+        permissionHandler: createApprovedPermissionHandler(),
+        onThinkingChange: () => {},
+        ensureBackend: async () => backend,
+      });
+
+      await runtime.startOrLoad({});
+      runtime.beginTurn();
+      const oldOperation = stage === 'compact'
+        ? runtime.compactContext('/compact')
+        : runtime.sendPromptWithMeta({
+            text: 'old prompt',
+            localId: 'old-local-id',
+            ...(stage === 'submitted-callback'
+              ? { onProviderPromptSubmitted: async () => {
+                  oldStarted.resolve();
+                  await oldCallback.promise;
+                } }
+              : { onProviderPromptAccepted: () => { accepted.push('old-local-id'); } }),
+          });
+      const oldResult = oldOperation.then(() => null, (error: unknown) => error);
+      await oldStarted.promise;
+      await runtime.cancel();
+
+      runtime.beginTurn();
+      await runtime.sendPromptWithMeta({
+        text: 'replacement',
+        localId: 'replacement-local-id',
+        onProviderPromptAccepted: () => { accepted.push('replacement-local-id'); },
+      });
+      if (stage === 'submission') {
+        oldSubmission.reject(new AcpPromptSubmissionPhaseError(
+          'rejected_before_effect',
+          markTurnFailure(new Error('late superseded prompt failure')),
+        ));
+      } else if (stage === 'completion') {
+        oldCompletion.reject(markTurnFailure(new Error('late superseded prompt failure')));
+      } else if (stage === 'cancelled-outcome') {
+        oldCompletion.resolve({ kind: 'aborted', stopReason: 'cancelled' });
+      } else {
+        oldCallback.reject(markTurnFailure(new Error('late superseded prompt failure')));
+      }
+      const oldError = await oldResult;
+      expect(isAbortLikeError(oldError)).toBe(true);
+      expect(await runtime.failTurn(oldError)).toBe(false);
+      expect(runtime.isTurnInFlight()).toBe(true);
+      expect(sent.some((message) => message.type === 'turn_failed')).toBe(false);
+
+      await runtime.flushTurn();
+      expect(sent.filter((message) => message.type === 'task_complete')).toHaveLength(1);
+      runtime.beginTurn();
+      await runtime.sendPromptWithMeta({
+        text: 'ordinary follow-up',
+        localId: 'followup-local-id',
+        onProviderPromptAccepted: () => { accepted.push('followup-local-id'); },
+      });
+      await runtime.flushTurn();
+      expect(accepted).toContain('replacement-local-id');
+      expect(accepted).toContain('followup-local-id');
+      if (stage === 'submission') expect(accepted).not.toContain('old-local-id');
+      expect(sent.filter((message) => message.type === 'task_complete')).toHaveLength(2);
+      await runtime.reset();
+    },
+  );
+
   it('preserves structured prompt metadata on the first follow-up after vendor resume', async () => {
     const sendPromptPayloadWithEvidence = vi.fn(async () => ({
       kind: 'exact_final_response' as const,
