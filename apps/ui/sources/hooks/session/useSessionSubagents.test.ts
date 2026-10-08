@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook } from '@/dev/testkit';
+import { createSessionFixture, renderHook } from '@/dev/testkit';
 import { renderHookAndCollectValues } from '@/hooks/server/serverFeatureHookHarness.testHelpers';
 import { getStorage } from '@/sync/domains/state/storage';
 import type { DirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
@@ -42,6 +42,22 @@ beforeEach(() => {
 });
 
 describe('useSessionSubagents', () => {
+    it('refreshes a live name without status changes and keeps equal names stable', async () => {
+        runningExecutionRunsState.current = [{ runId: 'run_named', status: 'running' }];
+        const session = createSessionFixture({ id: 'session-1' });
+        const hook = await renderHook(() => useSessionSubagents({
+            sessionId: 'session-1', session, messages: [], directSessionRuntime: directSessionRuntimeState,
+        }));
+        expect(hook.getCurrent().subagents[0]?.display.title).toBe('run_named');
+        runningExecutionRunsState.current = [{ runId: 'run_named', status: 'running', display: { title: 'Acknowledged specialist' } }];
+        await hook.rerender();
+        const named = hook.getCurrent();
+        expect(named.subagents[0]?.display.title).toBe('Acknowledged specialist');
+        runningExecutionRunsState.current = [{ runId: 'run_named', status: 'running', display: { title: 'Acknowledged specialist' } }];
+        await hook.rerender();
+        expect(hook.getCurrent().subagents).toBe(named.subagents);
+        await hook.unmount();
+    });
     it('returns an empty subagent model without crashing when execution runs are disabled', async () => {
         const seen = await renderHookAndCollectValues(() =>
             useSessionSubagents({

@@ -67,6 +67,38 @@ function deriveSingleRun(messages: readonly Message[]) {
     return run!;
 }
 
+describe('managed execution-run names', () => {
+    it.each([
+        { input: { display: { title: 'Saved specialist' } }, result: undefined, title: 'Saved specialist' },
+        { input: { display: { participantLabel: 'Caller specialist' } }, result: undefined, title: 'Caller specialist' },
+        { input: {}, result: { display: { title: 'Native specialist' } }, title: 'Native specialist' },
+        { input: { label: 'Legacy label', display: { title: 'New label' } }, result: undefined, title: 'Legacy label' },
+        { input: { configOptions: { agent: 'not-authoritative' }, instructions: 'Private prompt' }, result: undefined, title: RUN_ID },
+    ])('carries transcript identity to roster and recovered public state ($title)', ({ input, result, title }) => {
+        const messages = [createSubAgentRunMessage({
+            state: 'running',
+            input: { intent: 'delegate', backendId: 'copilot', runClass: 'bounded', ioMode: 'request_response', ...input },
+            result,
+        })];
+        expect(deriveSingleRun(messages).display.title).toBe(title);
+        const state = findTranscriptExecutionRunState(messages, RUN_ID)!;
+        const recovered = buildExecutionRunPublicStateFromTranscriptState(state);
+        expect(recovered?.display?.title ?? RUN_ID).toBe(title);
+    });
+
+    it('uses live display when the transcript has no label without changing routing or status', () => {
+        const messages = [createSubAgentRunMessage({ state: 'running', input: { intent: 'delegate', runClass: 'long_lived' } })];
+        const [run] = deriveExecutionRunSubagents({
+            messages,
+            activeExecutionRuns: [{ runId: RUN_ID, status: 'running', display: { title: 'Live specialist' } }],
+        });
+        expect(run).toMatchObject({
+            status: 'running', display: { title: 'Live specialist' },
+            runRef: { runId: RUN_ID }, recipient: { kind: 'execution_run', runId: RUN_ID, label: 'Live specialist' },
+        });
+    });
+});
+
 describe('deriveExecutionRunSubagents — terminal status truthfulness (D-1)', () => {
     it('never renders a timeout run as succeeded', () => {
         const run = deriveSingleRun([

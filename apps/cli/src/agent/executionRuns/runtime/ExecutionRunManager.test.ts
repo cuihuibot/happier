@@ -76,7 +76,12 @@ function createDelayedJsonBackend(responseText: string, delayMs: number): AgentB
 }
 
 describe('ExecutionRunManager start request idempotency', () => {
-  it('publishes provider-acknowledged native identity separately from requested model and profile', async () => {
+  it.each([
+    { display: undefined, expectedDisplay: { title: 'reader' } },
+    { display: { title: 'Saved profile', groupId: 'team' }, expectedDisplay: { title: 'Saved profile', groupId: 'team' } },
+    { display: { participantLabel: 'Caller label' }, expectedDisplay: { participantLabel: 'Caller label' } },
+  ])('publishes acknowledged native identity without replacing an explicit name (%j)', async ({ display, expectedDisplay }) => {
+    const sent: ACPMessageData[] = [];
     const backend = createStaticJsonBackend('{"summary":"ok"}');
     let receive: AgentMessageHandler | undefined;
     const register = backend.onMessage.bind(backend);
@@ -88,19 +93,23 @@ describe('ExecutionRunManager start request idempotency', () => {
       return { sessionId: 'native-session' as SessionId };
     };
     const manager = new ExecutionRunManager({
-      parentProvider: 'copilot', cwd: process.cwd(), createBackend: () => backend, sendAcp: () => {},
+      parentProvider: 'copilot', cwd: process.cwd(), createBackend: () => backend, sendAcp: (_provider, body) => { sent.push(body); },
     });
     const started = await manager.start({
       sessionId: 'parent', intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
       profileId: 'saved-reader', modelId: 'requested-model',
+      ...(display ? { display } : {}),
       permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
     });
     await manager.waitForTerminal(started.runId);
     expect(manager.getPublic(started.runId)).toMatchObject({
       profileId: 'saved-reader', requestedModelId: 'requested-model',
       nativeSelection: { agentId: 'reader', modelId: 'actual-model', verification: 'provider_acknowledged' },
+      display: expectedDisplay,
     });
     expect(manager.listPublic()[0]).toEqual(manager.getPublic(started.runId));
+    const result = sent.find((message) => message.type === 'tool-result' && message.callId === started.callId);
+    expect(result).toMatchObject({ output: { display: expectedDisplay } });
   });
   it('returns the same run handle for the same correlated start without creating a duplicate backend', async () => {
     const createBackend = vi.fn(() => createStaticJsonBackend('{"summary":"ok","findings":[]}'));

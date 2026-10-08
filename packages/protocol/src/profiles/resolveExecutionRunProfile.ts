@@ -8,6 +8,8 @@ import { AcpConfigOptionOverridesV1Schema } from '../sessionMetadata/metadataOve
 import { type AIBackendProfile } from './backendProfileSchema.js';
 import { resolveBackendProfile } from './resolveBackendProfile.js';
 import { isProfileCompatibleWithBackendTarget } from './profileCompatibility.js';
+import { ExecutionRunDisplaySchema } from '../executionRunStartRequest.js';
+import { resolveExecutionRunDisplayTitle } from '../executionRunDisplay.js';
 
 const ExplicitConfigSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]));
 
@@ -57,6 +59,8 @@ export function resolveExecutionRunProfile(
     : EXECUTION_RUN_ACTION_PERMISSION_MODES.find((mode) =>
       resolvePermissionPrivilegeOrdinal(mode) === resolvePermissionPrivilegeOrdinal(permissionMode));
   if (permissionMode !== undefined && !normalizedPermission) throw new Error('Unsupported worker permission mode');
+  const display = input.display === undefined ? undefined : ExecutionRunDisplaySchema.parse(input.display);
+  const profileTitle = profile.name.trim();
   const canonical: Record<string, unknown> = {
     permissionMode: input.intent === 'plan' ? 'read_only' : 'workspace_write',
     retentionPolicy: 'ephemeral',
@@ -68,6 +72,8 @@ export function resolveExecutionRunProfile(
     ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)),
     ...(normalizedPermission ? { permissionMode: normalizedPermission } : {}),
     profileId: profile.id,
+    ...(resolveExecutionRunDisplayTitle({ display }) ? { display }
+      : profileTitle ? { display: { ...display, title: profileTitle } } : {}),
     backendTarget: target,
     ...(fanout ? { backendTargetKeys: [key] } : {}),
     sessionConfigOptionOverrides: {

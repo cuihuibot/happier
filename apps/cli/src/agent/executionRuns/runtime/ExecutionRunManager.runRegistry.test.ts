@@ -87,6 +87,7 @@ describe('ExecutionRunManager execution-run registry integration', () => {
       intent: 'review',
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       instructions: 'Review this repo.',
+      display: { title: 'Named worker', groupId: 'team' },
       permissionMode: 'read_only',
       retentionPolicy: 'ephemeral',
       runClass: 'bounded',
@@ -95,6 +96,7 @@ describe('ExecutionRunManager execution-run registry integration', () => {
 
     const running = await listExecutionRunMarkers();
     expect(running.some((m) => m.runId === started.runId)).toBe(true);
+    expect(running.find((m) => m.runId === started.runId)?.display).toEqual({ title: 'Named worker', groupId: 'team' });
 
     await manager.waitForTerminal(started.runId);
 
@@ -112,6 +114,7 @@ describe('ExecutionRunManager execution-run registry integration', () => {
     expect(marker?.intent).toBe('review');
     expect(marker?.backendTarget).toEqual({ kind: 'builtInAgent', agentId: 'claude' });
     expect(marker?.permissionMode).toBe('read_only');
+    expect(marker?.display).toEqual({ title: 'Named worker', groupId: 'team' });
     expect(typeof marker?.startedAtMs).toBe('number');
     expect(typeof marker?.updatedAtMs).toBe('number');
   });

@@ -91,11 +91,40 @@ describe('createActionExecutor model/effort run-option parity', () => {
     expect(result.ok).toBe(true);
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
+      display: { title: 'My worker' },
       profileId: 'worker', modelId: 'override-model', permissionMode: 'read_only',
       backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
       retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
       sessionConfigOptionOverrides: { overrides: { agent: { value: 'reviewer' } } },
     });
+
+  });
+
+  it.each(['subagents.delegate.start', 'subagents.plan.start'] as const)('preserves explicit display across shared fanout (%s)', async (actionId) => {
+    const requests: unknown[] = [];
+    const executor = createActionExecutor(createDeps({
+      executionRunStart: async (_sessionId, request) => {
+        requests.push(request);
+        return { runId: `run_${requests.length}` };
+      },
+    }));
+    const result = await executor.execute(actionId, {
+      backendTargetKeys: ['agent:codex', 'acpBackend:custom'],
+      instructions: 'Work.', display: { title: 'Caller label', groupId: 'group' },
+    }, { defaultSessionId: 'parent' });
+    expect(result.ok).toBe(true);
+    expect(requests).toHaveLength(2);
+    for (const request of requests) expect(request).toMatchObject({ display: { title: 'Caller label', groupId: 'group' } });
+  });
+
+  it.each([{ title: 'x'.repeat(201) }, { participantLabel: 123 }])('rejects malformed display before launching (%j)', async (display) => {
+    const executionRunStart = vi.fn(async () => ({}));
+    const executor = createActionExecutor(createDeps({ executionRunStart }));
+    const result = await executor.execute('subagents.delegate.start', {
+      backendTargetKeys: ['agent:codex'], instructions: 'Work.', display,
+    }, { defaultSessionId: 'parent' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(executionRunStart).not.toHaveBeenCalled();
   });
 
   it('rejects a missing explicitly selected profile rather than launching generic work', async () => {

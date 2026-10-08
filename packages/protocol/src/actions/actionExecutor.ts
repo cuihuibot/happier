@@ -1759,6 +1759,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               {
                 intent,
                 ...(typeof parsed.data.profileId === 'string' ? { profileId: parsed.data.profileId } : {}),
+                ...(parsed.data.display ? { display: parsed.data.display } : {}),
                 ...(ctx.actionRequestId
                   ? { startRequestId: `${ctx.actionRequestId}:${backendTargetKey}` }
                   : {}),
