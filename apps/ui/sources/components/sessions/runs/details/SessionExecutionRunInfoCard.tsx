@@ -1,4 +1,4 @@
-import type { ExecutionRunPublicState } from '@happier-dev/protocol';
+import { resolveExecutionRunDisplayTitle, type ExecutionRunPublicState } from '@happier-dev/protocol';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -99,6 +99,8 @@ function buildFacts(run: ExecutionRunPublicState): readonly string[] {
 }
 
 function resolveTitle(run: ExecutionRunPublicState): string {
+    const displayTitle = resolveExecutionRunDisplayTitle(run);
+    if (displayTitle) return displayTitle;
     const intentLabel = resolveIntentLabel((run as any).intent);
     if (intentLabel) {
         return t('executionRuns.details.titles.executionRunWithIntent', { intent: intentLabel });

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ExecutionRunPublicStateSchema } from '@happier-dev/protocol';
+import { ExecutionRunPublicStateSchema, resolveExecutionRunDisplayTitle } from '@happier-dev/protocol';
 
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
@@ -62,8 +62,15 @@ export function createBackendControllerMessageHandler(args: Readonly<{
       const selection = ExecutionRunPublicStateSchema.shape.nativeSelection.unwrap().parse(msg.payload);
       const run = args.runs.get(args.runId);
       if (run) {
-        args.runs.set(args.runId, { ...run, nativeSelection: selection });
+        const title = resolveExecutionRunDisplayTitle({ nativeSelection: selection, backendTarget: run.backendTarget });
+        args.runs.set(args.runId, {
+          ...run,
+          nativeSelection: selection,
+          ...(!resolveExecutionRunDisplayTitle({ display: run.display }) && title
+            ? { display: { ...run.display, title } } : {}),
+        });
         args.onPublicStateUpdated?.(args.runId);
+        if (title) void args.writeActivityMarker(args.runId, args.getNowMs(), { force: true });
       }
       return;
     }

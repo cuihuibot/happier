@@ -3,7 +3,7 @@ import type { ToolCall } from '@/sync/domains/messages/messageTypes';
 import { t } from '@/text';
 import { ICON_TASK } from '../icons';
 import type { KnownToolDefinition } from '../_types';
-import { SubAgentRunInputV2Schema } from '@happier-dev/protocol';
+import { resolveExecutionRunTranscriptDisplayTitle, SubAgentRunInputV2Schema } from '@happier-dev/protocol';
 
 export const coreSubAgentRunTools = {
     SubAgentRun: {
@@ -12,8 +12,7 @@ export const coreSubAgentRunTools = {
         isMutable: true,
         extractSubtitle: (opts: { metadata: Metadata | null; tool: ToolCall }) => {
             const input = opts.tool.input as any;
-            const rawLabel = typeof input?.label === 'string' ? input.label : null;
-            const label = rawLabel ? rawLabel.trim() : '';
+            const label = resolveExecutionRunTranscriptDisplayTitle(opts.tool.input, opts.tool.result);
             if (label) return label;
 
             const desc = typeof opts.tool.description === 'string' ? opts.tool.description.trim() : '';

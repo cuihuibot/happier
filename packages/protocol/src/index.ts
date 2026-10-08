@@ -2411,6 +2411,7 @@ export {
   type ExecutionRunTurnStreamEventError,
   type ExecutionRunStatus,
 } from './executionRuns.js';
+export { resolveExecutionRunDisplayTitle, resolveExecutionRunTranscriptDisplayTitle } from './executionRunDisplay.js';
 
 export {
   DaemonExecutionRunMarkerSchema,

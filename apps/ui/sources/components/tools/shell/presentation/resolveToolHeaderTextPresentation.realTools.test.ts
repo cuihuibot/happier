@@ -24,6 +24,13 @@ function makeToolCall(overrides: Partial<ToolCall>): ToolCall {
 }
 
 describe('resolveToolHeaderTextPresentation (real known tools)', () => {
+    it.each([
+        { input: { display: { title: 'Named profile' } }, result: null, label: 'Named profile' },
+        { input: {}, result: { display: { title: 'Native specialist' }, summary: 'Work output' }, label: 'Native specialist' },
+    ])('shows managed identity in the transcript header ($label)', ({ input, result, label }) => {
+        const tool = makeToolCall({ name: 'SubAgentRun', input, result });
+        expect(resolveToolHeaderTextPresentation({ tool, metadata: null }).subtitle).toBe(label);
+    });
     it('renders Read with Read File title and path subtitle', () => {
         const tool = makeToolCall({ name: 'Read', input: { file_path: '/tmp/example.txt' } });
         const model = resolveToolHeaderTextPresentation({ tool, metadata: null });

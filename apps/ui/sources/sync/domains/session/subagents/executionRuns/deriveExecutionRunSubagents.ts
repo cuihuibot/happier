@@ -1,4 +1,5 @@
 import type { Message } from '@/sync/domains/messages/messageTypes';
+import { resolveExecutionRunDisplayTitle } from '@happier-dev/protocol';
 import { canSendMessagesToExecutionRun } from '@/sync/domains/executionRuns/canSendMessagesToExecutionRun';
 
 import type { SessionSubagent, SessionSubagentActiveExecutionRunState, SessionSubagentStatus } from '../types';
@@ -37,12 +38,15 @@ export function deriveExecutionRunSubagents(params: Readonly<{
     }
 
     const runningFromExternal = new Set<string>();
+    const liveTitles = new Map<string, string>();
     for (const run of params.activeExecutionRuns ?? []) {
         if (!run || typeof run !== 'object') continue;
         const runId = typeof run.runId === 'string' ? run.runId.trim() : '';
         const status = typeof run.status === 'string' ? run.status.trim().toLowerCase() : '';
         if (!runId || status !== 'running' || explicitlyStoppedRunIds.has(runId)) continue;
         runningFromExternal.add(runId);
+        const title = resolveExecutionRunDisplayTitle(run);
+        if (title) liveTitles.set(runId, title);
     }
 
     const allRunIds = new Set<string>([
@@ -69,7 +73,8 @@ export function deriveExecutionRunSubagents(params: Readonly<{
                 ? 'running'
                 : transcriptState?.status ?? 'unknown'
                 );
-        const displayTitle = transcriptState?.displayLabel ?? runId;
+        const displayLabel = transcriptState?.displayLabel ?? liveTitles.get(runId);
+        const displayTitle = displayLabel ?? runId;
         const canOpen = Boolean(transcriptState?.sidechainId);
         const canSend = canSendMessagesToExecutionRun({
             status: effectiveStatus,
@@ -103,7 +108,7 @@ export function deriveExecutionRunSubagents(params: Readonly<{
                 ? {
                     kind: 'execution_run',
                     runId,
-                    ...(transcriptState?.displayLabel ? { label: transcriptState.displayLabel } : {}),
+                    ...(displayLabel ? { label: displayLabel } : {}),
                 }
                 : null,
             capabilities: {

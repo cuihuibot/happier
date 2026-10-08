@@ -10,7 +10,7 @@ import { PromptRegistryConfiguredSourceV1Schema } from '../promptLibrary/promptR
 import { PromptAssetInstallModeV1Schema, PromptAssetScopeV1Schema } from '../promptLibrary/promptAssetsV1.js';
 import { BackendTargetKeySchema, BackendTargetRefSchema, buildBackendTargetKey, parseBackendTargetKey } from '../backendTargets/backendTargetRef.js';
 import { ExecutionRunListRequestSchema } from '../executionRunListRequest.js';
-import { ExecutionRunStartRequestSchema } from '../executionRunStartRequest.js';
+import { ExecutionRunDisplaySchema, ExecutionRunStartRequestSchema } from '../executionRunStartRequest.js';
 import { SessionRollbackTargetSchema } from '../sessionRollback.js';
 import { SessionForkRpcParamsSchema } from '../sessionFork.js';
 import { PendingFirstInputV1Schema } from '../spawnSession.js';
@@ -427,6 +427,7 @@ const IntentStartCommonSchema = z.object({
   sessionId: z.string().min(1).optional(),
   backendTargetKeys: z.array(BackendTargetKeySchema).min(1),
   instructions: z.string().trim().min(1),
+  display: ExecutionRunDisplaySchema.optional(),
   permissionMode: ExecutionRunActionPermissionModeSchema.optional(),
   retentionPolicy: z.enum(['ephemeral', 'resumable']).optional(),
   runClass: z.enum(['bounded', 'long_lived']).optional(),
@@ -496,7 +497,7 @@ const ExecutionRunStartInputSchema = z.object({
   intent: z.enum(['review', 'plan', 'delegate', 'voice_agent', 'memory_hints']),
   backendTarget: BackendTargetRefSchema,
   instructions: z.string().optional(),
-  display: z.unknown().optional(),
+  display: ExecutionRunDisplaySchema.optional(),
   permissionMode: z.string().min(1),
   retentionPolicy: z.enum(['ephemeral', 'resumable']),
   runClass: z.enum(['bounded', 'long_lived']),

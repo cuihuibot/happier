@@ -1,4 +1,4 @@
-import type { ParticipantRecipientV1 } from '@happier-dev/protocol';
+import type { BackendTargetRefV1, ExecutionRunDisplay, ExecutionRunPublicState, ParticipantRecipientV1 } from '@happier-dev/protocol';
 
 export type SessionSubagentKind = 'execution_run' | 'agent_team_member' | 'subagent_sidechain';
 export type SessionSubagentStatus = 'running' | 'succeeded' | 'failed' | 'timedOut' | 'cancelled' | 'terminated' | 'unknown';
@@ -58,4 +58,7 @@ export type SessionSubagent = Readonly<{
 export type SessionSubagentActiveExecutionRunState = Readonly<{
     runId: string;
     status?: string | null;
+    display?: ExecutionRunDisplay;
+    nativeSelection?: ExecutionRunPublicState['nativeSelection'];
+    backendTarget?: BackendTargetRefV1;
 }>;

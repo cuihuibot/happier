@@ -1,4 +1,4 @@
-import { ExecutionRunLaunchOriginSchema, type BackendTargetRefV1, type ExecutionRunLaunchOrigin } from '@happier-dev/protocol';
+import { ExecutionRunLaunchOriginSchema, resolveExecutionRunTranscriptDisplayTitle, type BackendTargetRefV1, type ExecutionRunLaunchOrigin } from '@happier-dev/protocol';
 
 import type { Message, ToolCallMessage } from '@/sync/domains/messages/messageTypes';
 import { resolveToolTranscriptSidechainId } from '@/components/tools/shell/views/resolveToolTranscriptSidechainId';
@@ -136,8 +136,7 @@ export function deriveTranscriptExecutionRunStateIndex(messages: readonly Messag
         const status = deriveTranscriptExecutionRunStatus(toolMessage.tool);
         const current = byRunId.get(runId);
         const sidechainId = resolveToolTranscriptSidechainId({ tool: toolMessage.tool, normalizedToolName: 'SubAgentRun' }) ?? current?.sidechainId;
-        const displayLabel = readOptionalString(inputRecord, 'label')
-            ?? readOptionalString(resultRecord, 'label')
+        const displayLabel = resolveExecutionRunTranscriptDisplayTitle(inputRecord, resultRecord)
             ?? current?.displayLabel;
 
         const nextStatus =

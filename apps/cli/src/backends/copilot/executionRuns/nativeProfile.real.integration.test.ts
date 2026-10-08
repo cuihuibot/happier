@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { ExecutionRunManager } from '@/agent/executionRuns/runtime/ExecutionRunManager';
 import { createExecutionRunBackend } from '@/agent/executionRuns/runtime/createExecutionRunBackend';
-import { accountSettingsParse, AIBackendProfileSchema, DelegateOutputV1Schema, ExecutionRunStartRequestSchema, resolveExecutionRunProfile, redactBugReportSensitiveText } from '@happier-dev/protocol';
+import { accountSettingsParse, AIBackendProfileSchema, DelegateOutputV1Schema, ExecutionRunStartRequestSchema, resolveExecutionRunDisplayTitle, resolveExecutionRunProfile, resolveExecutionRunTranscriptDisplayTitle, redactBugReportSensitiveText } from '@happier-dev/protocol';
 import ts from 'typescript';
 import { z } from 'zod';
 import { probeAgentConfigOptionsBestEffort } from '@/capabilities/probes/agentConfigOptionsProbe';
@@ -68,43 +68,71 @@ async function readNativePublicTurn(vendorHome: string, sessionId: string, turn:
 async function createFixture() {
   const root = await mkdtemp(join(tmpdir(), 'happier-native-profile-live-'));
   const cwd = join(root, 'workspace');
-  const vendorHome = join(root, 'copilot');
+  const vendorHome = join(homedir(), '.copilot');
   const marker = `H8_${randomUUID().replaceAll('-', '')}`;
   try {
     await mkdir(cwd);
-    await mkdir(join(vendorHome, 'agents'), { recursive: true });
-    const parsed = ts.parseConfigFileTextToJson('config.json', await readFile(join(homedir(), '.copilot', 'config.json'), 'utf8'));
+    const agentsDirectory = join(cwd, '.github', 'agents');
+    await mkdir(agentsDirectory, { recursive: true });
+    const configurationBytes = await readFile(join(vendorHome, 'config.json'));
+    const configurationSha256 = createHash('sha256').update(configurationBytes).digest('hex');
+    const sessionIdsBefore = new Set(await readdir(join(vendorHome, 'session-state')));
+    const parsed = ts.parseConfigFileTextToJson('config.json', configurationBytes.toString('utf8'));
     if (parsed.error) throw new Error('Unable to parse existing account-reference configuration');
     const referenceSchema = z.object({
       host: z.string().regex(/^(https:\/\/)?([a-z0-9-]+\.)*(github\.com|ghe\.com)\/?$/i),
       login: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i),
     }).strict();
     const configuration: unknown = parsed.config;
-    const accountConfig = z.object({ lastLoggedInUser: referenceSchema, loggedInUsers: z.array(referenceSchema) }).safeParse(configuration);
-    if (!accountConfig.success) throw new Error('Account references contain unexpected structure; refusing to copy');
+    const loggedInReferenceSchema = referenceSchema.extend({ kind: z.literal('githubDotCom').optional() });
+    const accountConfig = z.object({
+      lastLoggedInUser: referenceSchema, loggedInUsers: z.array(loggedInReferenceSchema),
+    }).safeParse(configuration);
+    if (!accountConfig.success) throw new Error('Existing account references contain unexpected structure');
     const reference = accountConfig.data.lastLoggedInUser;
-    if (!accountConfig.data.loggedInUsers.some((entry) => entry.host === reference.host && entry.login === reference.login)) {
+    const loggedInReference = accountConfig.data.loggedInUsers.find((entry) =>
+      entry.host === reference.host && entry.login === reference.login);
+    if (!loggedInReference) {
       throw new Error('Selected account reference is not in the existing logged-in account list');
     }
-    await writeFile(join(vendorHome, 'config.json'), JSON.stringify({
-      lastLoggedInUser: reference, loggedInUsers: [reference], trustedFolders: [cwd],
-    }), { mode: 0o600 });
-    await writeFile(join(vendorHome, 'agents', 'h8-reader.agent.md'),
+    // Account references alone do not preserve the provider's authenticated model catalog.
+    await writeFile(join(agentsDirectory, 'h8-reader.agent.md'),
       '---\nname: h8-reader\ndescription: Isolated read-only acceptance worker\ntools: ["read"]\n---\nRead the assignment. Reply exactly as requested. Do not delegate or modify files.\n');
-    await writeFile(join(vendorHome, 'agents', 'h8-checker.agent.md'),
+    await writeFile(join(agentsDirectory, 'h8-checker.agent.md'),
       '---\nname: h8-checker\ndescription: Independent isolated arithmetic worker\ntools: ["read"]\n---\nRead the assignment. Reply exactly as requested. Do not delegate or modify files.\n');
     await writeFile(join(cwd, 'sample.txt'), `${marker}\n13 29\n`);
     await writeFile(join(cwd, 'checker.txt'), `${marker}_checker\n7 11\n`);
-    return { root, cwd, vendorHome, marker };
+    return { root, cwd, vendorHome, marker, configurationSha256, sessionIdsBefore };
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;
   }
 }
 
-// Existing provider/account only; all provider state and authored input are disposable.
+async function cleanupFixture(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  const sessionDirectory = join(fixture.vendorHome, 'session-state');
+  for (const id of await readdir(sessionDirectory)) {
+    if (fixture.sessionIdsBefore.has(id)) continue;
+    const path = join(sessionDirectory, id);
+    let workspace: string;
+    try {
+      workspace = await readFile(join(path, 'workspace.yaml'), 'utf8');
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!workspace.split('\n').includes(`cwd: ${fixture.cwd}`)) continue;
+    await rm(path, { recursive: true });
+    logPublicDiagnostic('retiredNativeSession', { marker: fixture.marker, sessionId: id });
+  }
+  await rm(fixture.root, { recursive: true, force: true });
+  expect(createHash('sha256').update(await readFile(join(fixture.vendorHome, 'config.json'))).digest('hex'))
+    .toBe(fixture.configurationSha256);
+}
+
+// Existing authenticated provider home; agents and assignments are workspace-local.
 describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile managed Copilot (live)', () => {
-  it('discovers native choices with isolated existing-account reference metadata', async () => {
+  it('discovers workspace-local native choices through the existing authenticated account', async () => {
     const fixture = await createFixture();
     try {
       const result = await probeAgentConfigOptionsBestEffort({
@@ -122,13 +150,15 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
         modelCount: options.find((option) => option.id === 'model')?.options?.length ?? 0,
       }));
       expect(options.find((option) => option.id === 'agent')?.options?.some((option) => option.value === 'h8-reader')).toBe(true);
+      expect(options.find((option) => option.id === 'model')?.options?.length).toBeGreaterThan(0);
     } finally {
-      await rm(fixture.root, { recursive: true, force: true });
+      await cleanupFixture(fixture);
     }
   }, 120_000);
 
-  it('completes a resumed bounded profile run with fresh results and the same native session', async () => {
-    const { root, cwd, vendorHome, marker } = await createFixture();
+  it.each(['native', 'profile'] as const)('retains the %s worker name through bounded completion and resume', async (kind) => {
+    const fixture = await createFixture();
+    const { cwd, vendorHome, marker } = fixture;
     const profile = AIBackendProfileSchema.parse({
       id: 'bounded-reader', name: 'Bounded acceptance reader',
       executionRunDefaults: {
@@ -137,8 +167,9 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
         runClass: 'bounded', retentionPolicy: 'resumable', ioMode: 'request_response',
       },
     });
+    const transcript: ACPMessageData[] = [];
     const manager = new ExecutionRunManager({
-      cwd, parentProvider: 'copilot', sendAcp: () => {},
+      cwd, parentProvider: 'copilot', sendAcp: (_provider, body) => { transcript.push(body); },
       resolveAccountSettings: () => ({ profiles: [profile] }),
       createBackend: (options) => createExecutionRunBackend({
         ...options, cwd, accountSettings: {},
@@ -147,20 +178,57 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
     });
     let runId: string | undefined;
     try {
-      const input = ExecutionRunStartRequestSchema.parse(resolveExecutionRunProfile({
-        profileId: profile.id, intent: 'delegate', permissionMode: 'read_only', modelId: 'gpt-6-astra',
+      const request = {
+        intent: 'delegate', permissionMode: 'read_only', modelId: 'gpt-6-astra',
         instructions: `Do not use tools. Remember token ${marker} and number 37. Return exactly {"summary":"${marker}:37","deliverables":[]}.`,
-      }, [profile], false));
+      };
+      const input = ExecutionRunStartRequestSchema.parse(kind === 'profile'
+        ? resolveExecutionRunProfile({ ...request, profileId: profile.id }, [profile], false)
+        : {
+          ...request,
+          backendTarget: profile.executionRunDefaults?.backendTarget,
+          sessionConfigOptionOverrides: profile.executionRunDefaults?.sessionConfigOptionOverrides,
+          runClass: 'bounded', retentionPolicy: 'resumable', ioMode: 'request_response',
+        });
+      const expectedTitle = kind === 'profile' ? profile.name : 'h8-reader';
       const started = await manager.start({ ...input, sessionId: `parent-${marker}` });
       runId = started.runId;
+      await vi.waitUntil(() => {
+        const run = manager.getPublic(started.runId);
+        if (run?.error) throw new Error(`${run.error.code}: ${run.error.message}`);
+        return run?.nativeSelection?.verification === 'provider_acknowledged'
+          && resolveExecutionRunDisplayTitle(run) === expectedTitle;
+      }, { timeout: 120_000, interval: 250 });
+      expect(manager.getPublic(started.runId)?.nativeSelection?.verification).toBe('provider_acknowledged');
+      expect(resolveExecutionRunDisplayTitle(manager.getPublic(started.runId) ?? {})).toBe(expectedTitle);
       await manager.waitForTerminal(runId);
       expect(manager.getPublic(runId)?.status).toBe('succeeded');
-      expect(manager.getLatestToolResult(runId)).toMatchObject({ summary: `${marker}:37` });
+      expect(manager.getPublic(runId)?.display).toMatchObject({ title: expectedTitle });
+      expect(manager.getLatestToolResult(runId)).toMatchObject({
+        summary: `${marker}:37`, display: { title: expectedTitle },
+      });
+      const assertTranscriptTitle = () => {
+        const call = transcript.find((entry) => entry.type === 'tool-call' && entry.callId === started.callId);
+        const result = transcript.filter((entry) => entry.type === 'tool-result' && entry.callId === started.callId).at(-1);
+        if (call?.type !== 'tool-call' || result?.type !== 'tool-result') throw new Error('Missing keyed run transcript');
+        const title = resolveExecutionRunTranscriptDisplayTitle(call.input, result.output);
+        expect(title).toBe(expectedTitle);
+        return title;
+      };
+      assertTranscriptTitle();
       expect(manager.getPublic(runId)?.nativeSelection).toMatchObject({
         agentId: 'h8-reader', modelId: 'gpt-6-astra', verification: 'provider_acknowledged',
       });
       const resumeHandle = manager.getPublic(runId)?.resumeHandle;
       expect(resumeHandle?.kind).toBe('vendor_session.v1');
+      logPublicDiagnostic('boundedCompletion', {
+        marker, kind, ...started, expectedTitle,
+        status: manager.getPublic(runId)?.status,
+        selection: manager.getPublic(runId)?.nativeSelection,
+        display: manager.getPublic(runId)?.display,
+        transcriptTitle: assertTranscriptTitle(),
+        result: manager.getLatestToolResult(runId), resumeHandle, source: import.meta.url,
+      });
 
       expect(await manager.send(runId, {
         resume: true,
@@ -169,24 +237,38 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
       expect(manager.getLatestToolResult(runId)).toBeNull();
       await manager.waitForTerminal(runId);
       expect(manager.getPublic(runId)?.status).toBe('succeeded');
-      expect(manager.getLatestToolResult(runId)).toMatchObject({ summary: `${marker}:38` });
+      expect(manager.getLatestToolResult(runId)).toMatchObject({
+        summary: `${marker}:38`, display: { title: expectedTitle },
+      });
+      expect(manager.getPublic(runId)?.display).toMatchObject({ title: expectedTitle });
+      assertTranscriptTitle();
       expect(manager.getPublic(runId)?.resumeHandle).toEqual(resumeHandle);
       logPublicDiagnostic('boundedResume', {
-        marker, status: manager.getPublic(runId)?.status,
+        marker, kind, ...started, expectedTitle, status: manager.getPublic(runId)?.status,
         selection: manager.getPublic(runId)?.nativeSelection,
+        display: manager.getPublic(runId)?.display,
+        transcriptTitle: assertTranscriptTitle(),
+        result: manager.getLatestToolResult(runId), resumeHandle: manager.getPublic(runId)?.resumeHandle,
         sameNativeSession: true, source: import.meta.url,
       });
     } finally {
       if (runId) {
+        const run = manager.getPublic(runId);
+        logPublicDiagnostic('boundedFinalState', {
+          marker, kind, runId, callId: run?.callId, sidechainId: run?.sidechainId,
+          status: run?.status, error: run?.error, display: run?.display,
+          selection: run?.nativeSelection, resumeHandle: run?.resumeHandle, source: import.meta.url,
+        });
         await manager.stop(runId);
         await manager.waitForTerminal(runId);
       }
-      await rm(root, { recursive: true, force: true });
+      await cleanupFixture(fixture);
     }
   }, 240_000);
 
   it('preserves two acknowledged native identities, explicit model and original-run recall through resume', async () => {
-    const { root, cwd, vendorHome, marker } = await createFixture();
+    const fixture = await createFixture();
+    const { cwd, vendorHome, marker } = fixture;
     const profiles = ['h8-reader', 'h8-checker'].map((agent) => AIBackendProfileSchema.parse({
       id: agent, name: `Acceptance ${agent}`,
       executionRunDefaults: {
@@ -284,7 +366,7 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
       expect(new Set(vendorIds).size).toBe(2);
     } finally {
       for (const runId of runIds) await manager.stop(runId);
-      await rm(root, { recursive: true, force: true });
+      await cleanupFixture(fixture);
     }
   }, 540_000);
 
@@ -482,6 +564,7 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
         expect(runs.size).toBe(1);
         expect([...runs.values()][0]).toMatchObject({
           status: 'succeeded', turnInFlight: false,
+          display: { title: profile.name },
           profileId: 'h8-reader', nativeSelection: { agentId: 'h8-reader', modelId: 'gpt-6-astra', verification: 'provider_acknowledged' },
         });
         expect(nativeToolNames).not.toContain('task');
@@ -496,7 +579,9 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
         console.info(await readFile(diagnosticsPath, 'utf8'));
         logPublicDiagnostic('finalManagedStates', [...runs.values()].map((run) => ({
           runId: run.runId, status: run.status, turnInFlight: run.turnInFlight,
-          error: run.error, summary: run.summary, nativeSelection: run.nativeSelection, resumeHandle: run.resumeHandle,
+          error: run.error, summary: run.summary, display: run.display, profileId: run.profileId,
+          callId: run.callId, sidechainId: run.sidechainId,
+          nativeSelection: run.nativeSelection, resumeHandle: run.resumeHandle,
         })));
         logPublicDiagnostic('publicSidechainMessages', outputs.filter((output) => output.type === 'message'));
         if (parentId) {
@@ -520,7 +605,7 @@ describe.skipIf(process.env.HAPPIER_NATIVE_PROFILE_LIVE !== '1')('native profile
         bridge.happierMcpServer.stop();
         resetActiveAccountSettingsSnapshotForTests();
         envScope.restore();
-        await rm(fixture.root, { recursive: true, force: true });
+        await cleanupFixture(fixture);
       }
     }
   }, 240_000);

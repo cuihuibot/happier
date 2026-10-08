@@ -84,6 +84,16 @@ describe('SessionExecutionRunInfoCard', () => {
         startedAtMs: 1,
     } as const;
 
+    it('uses the specialist display title while preserving backend facts and run identity', async () => {
+        const { SessionExecutionRunInfoCard } = await import('./SessionExecutionRunInfoCard');
+        const { tree } = await renderScreen(<SessionExecutionRunInfoCard run={{ ...run, display: { title: 'Specialist' } }} />);
+        const text = JSON.stringify(tree.toJSON());
+        expect(text).toContain('Specialist');
+        expect(text).toContain('Backend: codex');
+        expect(text).toContain('Run ID: run_1');
+        expect(text).not.toContain('Review Subagent');
+    });
+
     it('renders a user-facing title and labeled facts instead of a raw run-id header', async () => {
         const { SessionExecutionRunInfoCard } = await import('./SessionExecutionRunInfoCard');
         const tree = (await renderScreen(

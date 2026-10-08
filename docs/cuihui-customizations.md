@@ -21,6 +21,44 @@ details from earlier public Git history.
 
 ## Maintained behavior
 
+### Managed worker names (development)
+
+Managed plan/delegate runs share the optional display contract described in
+[CLI architecture](cli-architecture.md#native-worker-profiles-and-parent-routing-development).
+Explicit caller titles or participant labels win over a resolved profile name.
+An otherwise unnamed run can use a specialist ID only after native provider
+acknowledgment. Generic backend identities do not become specialist names.
+Roster, recipients, transcript headers, run lists and detail cards consume the
+same name, including terminal transcript and marker recovery. Provider-native
+sidechains, permissions, models, routing and lifecycle behavior are unchanged.
+Old unnamed runs are not backfilled.
+
+Focused regressions live in the protocol display/profile/action tests, CLI
+execution-run runtime/registry tests and UI subagent/hook/run-detail tests.
+The existing opt-in Copilot live integration fixture also covers profile and
+native names through completion/resume and profile propagation through the real
+shared-action shell bridge:
+
+```bash
+cd apps/cli
+HAPPIER_NATIVE_PROFILE_LIVE=1 yarn vitest run --config vitest.integration.config.ts \
+  src/backends/copilot/executionRuns/nativeProfile.real.integration.test.ts \
+  -t 'worker name|routing through'
+```
+
+This command launches real providers and requires an authenticated Copilot CLI,
+the fixture's requested model, normal repository dependencies and explicit
+authority for disposable test runs. It uses the existing authenticated Copilot
+home without copying credentials or changing account/model defaults: account
+references alone do not preserve the provider's authenticated model catalog.
+Agent definitions and assignments live in a disposable workspace, not global
+agents or account-saved profiles. Cleanup checks configuration hash continuity
+and retires only new native sessions whose workspace matches that fixture.
+This candidate's
+live naming evidence is limited to Copilot on macOS; shared tests do not prove
+other providers live. Source coverage and manual visual acceptance are separate
+from release or deployment approval.
+
 ### Copilot completion persistence
 
 - A Copilot turn that finishes only through `task_complete` still creates a

@@ -64,6 +64,10 @@ export function finishExecutionRun(args: Readonly<{
   })();
 
   const controller = args.controllers.get(args.runId);
+  const output = args.toolResult.output;
+  const labeledOutput = existing.display && output && typeof output === 'object' && !Array.isArray(output)
+    ? { ...output, display: existing.display }
+    : output;
   const updated: ExecutionRunState = {
     ...existing,
     ...(controller?.kind === 'backend' ? { turnCount: controller.turnCount } : {}),
@@ -72,7 +76,7 @@ export function finishExecutionRun(args: Readonly<{
     finishedAtMs: args.next.finishedAtMs,
     ...(args.next.error ? { error: args.next.error } : {}),
     ...(args.structuredMeta ? { structuredMeta: args.structuredMeta } : {}),
-    latestToolResult: args.toolResult.output,
+    latestToolResult: labeledOutput,
     ...(existing.retentionPolicy === 'resumable' ? { resumeHandle } : {}),
   };
   args.runs.set(args.runId, updated);
@@ -159,7 +163,7 @@ export function finishExecutionRun(args: Readonly<{
       {
         type: 'tool-result',
         callId: existing.callId,
-        output: args.toolResult.output,
+        output: labeledOutput,
         id: randomUUID(),
         ...(args.toolResult.isError ? { isError: true } : {}),
       },

@@ -12,6 +12,23 @@ const profile = AIBackendProfileSchema.parse({
 });
 
 describe('native worker mapping resolution', () => {
+  it('uses the resolved profile name without replacing explicit display metadata', () => {
+    expect(resolveExecutionRunProfile({ profileId: 'reader' }, [profile], false).display).toEqual({ title: 'Reader' });
+    const display = { participantLabel: 'Caller label', groupId: 'team' };
+    expect(resolveExecutionRunProfile({ profileId: 'reader', display }, [profile], false).display).toEqual(display);
+  });
+  it.each([
+    { kind: 'builtInAgent', agentId: 'codex' },
+    { kind: 'configuredAcpBackend', backendId: 'custom' },
+  ] as const)('derives profile names independently of the backend and its native option vocabulary (%j)', (backendTarget) => {
+    const mapped = { ...profile, executionRunDefaults: {
+      backendTarget,
+      sessionConfigOptionOverrides: { v: 1 as const, updatedAt: 1, overrides: { specialist: { value: 'reader-native', updatedAt: 1 } } },
+    } };
+    expect(resolveExecutionRunProfile({ profileId: 'reader' }, [mapped], false)).toMatchObject({
+      display: { title: 'Reader' }, backendTarget,
+    });
+  });
   it('keeps explicit selection/lifetime above profile defaults', () => {
     expect(resolveExecutionRunProfile({
       profileId: 'READER', modelId: 'call-model', configOptions: { agent: 'explicit-native' },

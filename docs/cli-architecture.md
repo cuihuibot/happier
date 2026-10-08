@@ -458,6 +458,23 @@ connected selection. Resume rehydrates environment/account references without
 reapplying an edited mapping. Public state separates `requestedModelId` from
 provider-acknowledged `nativeSelection`; absent acknowledgment remains unverified.
 
+Managed run names use the existing optional `display` contract (development).
+Caller `title` or `participantLabel` takes precedence over a resolved saved
+profile's human name. Without either, the shared runtime records a specialist ID
+only after provider acknowledgment; it does not infer identity from prompts,
+environment variables, arbitrary config options, or a generic backend name.
+Without caller/profile labels, providers without native identity acknowledgment
+retain generic titles.
+Display metadata travels through live public state and daemon markers, initial
+transcript input for caller/profile labels, and terminal structured tool results.
+The shared UI resolver reads it for the roster, recipients, transcript header,
+run list and details, retaining legacy top-level `label` and unnamed-run fallbacks.
+Native labels arrive through live state while a run is active and remain in the
+terminal transcript after completion; this changes presentation, not run IDs,
+sidechain routing, permissions, model selection, lifetime or provider-native tasks.
+Historical unnamed runs remain unnamed unless their existing display or
+acknowledged identity is available; this is not a retrospective name backfill.
+
 Profile-based `execution_run_start` tool calls use the canonical action input and
 profile resolver, including when the backend is supplied by the saved profile.
 Malformed profile input is rejected rather than retried as a backend-only start.

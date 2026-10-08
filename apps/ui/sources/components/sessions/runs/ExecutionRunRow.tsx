@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import type { ExecutionRunPublicState } from '@happier-dev/protocol';
+import { resolveExecutionRunDisplayTitle, type ExecutionRunPublicState } from '@happier-dev/protocol';
 import { ExecutionRunStatusPill } from './ExecutionRunStatusPill';
 import { Text } from '@/components/ui/text/Text';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
@@ -10,7 +10,7 @@ import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/reso
 
 export type ExecutionRunRowRun =
     Pick<ExecutionRunPublicState, 'runId' | 'intent' | 'backendTarget' | 'status' | 'display'>
-    & Partial<Pick<ExecutionRunPublicState, 'startedAtMs' | 'finishedAtMs'>>;
+    & Partial<Pick<ExecutionRunPublicState, 'startedAtMs' | 'finishedAtMs' | 'nativeSelection'>>;
 
 export const ExecutionRunRow = React.memo((props: Readonly<{
     run: ExecutionRunRowRun;
@@ -22,12 +22,8 @@ export const ExecutionRunRow = React.memo((props: Readonly<{
     const { run, onPress } = props;
     const subtitle = typeof props.subtitle === 'string' ? props.subtitle : run.runId;
     const backendLabel = resolveExecutionRunBackendLabel(run.backendTarget);
-    const title =
-        (run.display && typeof run.display === 'object' && typeof (run.display as any).title === 'string' && String((run.display as any).title).trim().length > 0)
-            ? String((run.display as any).title).trim()
-            : (run.display && typeof run.display === 'object' && typeof (run.display as any).participantLabel === 'string' && String((run.display as any).participantLabel).trim().length > 0)
-                ? String((run.display as any).participantLabel).trim()
-                : backendLabel ? `${run.intent} · ${backendLabel}` : run.intent;
+    const title = resolveExecutionRunDisplayTitle(run)
+        ?? (backendLabel ? `${run.intent} · ${backendLabel}` : run.intent);
 
     return (
         <Pressable

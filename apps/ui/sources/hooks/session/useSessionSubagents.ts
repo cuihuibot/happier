@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { resolveExecutionRunDisplayTitle } from '@happier-dev/protocol';
 
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import { shouldEnableExecutionRunPolling } from '@/sync/domains/session/participants/shouldEnableExecutionRunPolling';
@@ -119,7 +120,7 @@ function useStableMessagesBySignature(
 
 function buildExecutionRunStateSignature(runs: readonly SessionSubagentActiveExecutionRunState[]): string {
     if (runs.length === 0) return '';
-    return runs.map((run) => `${run.runId}\u0000${run.status ?? ''}`).join('\u0001');
+    return JSON.stringify(runs.map((run) => [run.runId, run.status ?? '', resolveExecutionRunDisplayTitle(run)]));
 }
 
 function readSubagentKey(subagent: SessionSubagent): string {
