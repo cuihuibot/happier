@@ -26,6 +26,33 @@ afterEach(() => {
 });
 
 describe('buildHappierToolsShellBridgeCommand', () => {
+  it.each(['list', 'call'] as const)('recognizes canonical session-agent %s commands without dropping their surface', async (kind) => {
+    const {
+      buildHappierToolsShellBridgeCommand,
+      parseTrustedHappierToolsShellBridgeCommand,
+    } = await import('./buildHappierToolsShellBridgeCommand');
+    const command = buildHappierToolsShellBridgeCommand([
+      kind,
+      '--session-agent-bridge',
+      '--session-id',
+      'host-parent',
+      '--directory',
+      '/workspace/worker directory',
+      ...(kind === 'call' ? ['--source', 'happier', '--tool', 'action_execute', '--args-json', '{"actionId":"execution.run.get","input":{"runId":"run-1"}}'] : []),
+      '--json',
+    ]);
+
+    expect(parseTrustedHappierToolsShellBridgeCommand(command)).toMatchObject({
+      kind,
+      sessionAgentBridge: true,
+      sessionId: 'host-parent',
+      directory: '/workspace/worker directory',
+      json: true,
+    });
+    expect(parseTrustedHappierToolsShellBridgeCommand(`${command} '--session-agent-bridge'`)).toBeNull();
+    expect(parseTrustedHappierToolsShellBridgeCommand(`${command} && touch /tmp/happier-pwn`)).toBeNull();
+  });
+
   it('recognizes only the exact locally generated bridge launcher as trusted', async () => {
     const {
       buildHappierToolsShellBridgeCommand,

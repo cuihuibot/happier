@@ -53,6 +53,7 @@ import {
 } from '@/agent/executionRuns/runtime/executionRunManager/activityMarkers';
 import { deriveExecutionRunRuntimeActivityContribution } from '@/agent/executionRuns/runtime/executionRunRuntimeActivity';
 import { logger } from '@/ui/logger';
+import { buildExecutionRunToolDeliveryPrompt } from './buildExecutionRunToolDeliveryPrompt';
 
 function readBoundedExternalSendAckTimeoutMs(): number {
   const raw = process.env.HAPPIER_EXECUTION_RUN_BOUNDED_SEND_ACK_TIMEOUT_MS;
@@ -565,6 +566,7 @@ export class ExecutionRunManager {
   }): Promise<void> {
     return executeBoundedBackendRun({
       ...args,
+      cwd: this.cwd,
       controllers: this.controllers,
       sendAcp: this.sendAcp,
       parentProvider: this.parentProvider,
@@ -620,10 +622,22 @@ export class ExecutionRunManager {
     const run = this.runs.get(runId) ?? null;
     if (!run) return { ok: false, errorCode: 'execution_run_not_found', error: 'Not found' };
 
+    const sendParams = run.runClass === 'long_lived'
+      ? {
+          ...params,
+          message: buildExecutionRunToolDeliveryPrompt({
+            backendTarget: run.backendTarget,
+            sessionId: run.sessionId,
+            directory: this.cwd,
+            prompt: params.message,
+          }),
+        }
+      : params;
+
     if (params.resume === true) {
       const sendArgs = {
         runId,
-        params,
+        params: sendParams,
         runs: this.runs,
         controllers: this.controllers,
         budgetRegistry: this.budgetRegistry,
@@ -751,7 +765,7 @@ export class ExecutionRunManager {
 
     return sendBackendLongLivedRun({
       runId,
-      params,
+      params: sendParams,
       runs: this.runs,
       controllers: this.controllers,
       budgetRegistry: this.budgetRegistry,

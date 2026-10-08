@@ -14,6 +14,7 @@ import {
 } from '@/agent/executionRuns/runtime/executionRunErrors';
 import { buildReviewGuidanceBlock } from '@/agent/reviews/prompt/buildStandardReviewPrompt';
 import { logger } from '@/ui/logger';
+import { buildExecutionRunToolDeliveryPrompt } from './buildExecutionRunToolDeliveryPrompt';
 
 function stripTrailingJsonObjectFromText(text: string): string {
   const trimmed = String(text ?? '');
@@ -42,6 +43,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
   sidechainId: string;
   startedAtMs: number;
   params: ExecutionRunManagerStartParams;
+  cwd?: string;
   controllers: ReadonlyMap<string, ExecutionRunController>;
   sendAcp: AcpSendFn;
   parentProvider: ACPProvider;
@@ -100,7 +102,12 @@ export async function executeBoundedBackendRun(args: Readonly<{
       backendCtrl.buffer = '';
       backendCtrl.sidechainStreamBuffer = '';
       backendCtrl.sidechainStreamKey = '';
-      return backendCtrl.backend.sendPrompt(backendCtrl.childSessionId!, turnPrompt);
+      return backendCtrl.backend.sendPrompt(backendCtrl.childSessionId!, buildExecutionRunToolDeliveryPrompt({
+        backendTarget: params.backendTarget,
+        sessionId: params.sessionId,
+        directory: args.cwd ?? process.cwd(),
+        prompt: turnPrompt,
+      }));
     }
 
     async function waitForTurnComplete(sendPromptPromise: Promise<void>): Promise<void> {

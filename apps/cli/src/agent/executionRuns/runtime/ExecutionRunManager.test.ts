@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
+import { parseHappierToolsShellBridgeCommand } from '@happier-dev/protocol';
 import type {
   SessionRuntimeActivityContribution,
   SessionRuntimeActivityContributionHandle,
@@ -13,6 +14,25 @@ async function flushAsyncEffects(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function readBridgeCommands(prompt: string) {
+  return Array.from(prompt.matchAll(/`([^`]+)`/g), (match) => {
+    const text = match[1]!;
+    return parseHappierToolsShellBridgeCommand(text);
+  }).filter((command) => command !== null);
+}
+
+function expectWorkerDiscovery(prompt: string) {
+  const commands = readBridgeCommands(prompt);
+  expect(commands).toContainEqual(expect.objectContaining({
+    kind: 'list',
+    sessionId: 'authenticated_parent',
+    directory: '/workspace/worker directory',
+    json: true,
+    sessionAgentBridge: true,
+  }));
+  expect(commands.some((command) => command.kind === 'call' && command.tool === 'change_title')).toBe(false);
 }
 
 function createRuntimeActivityContributionHarness() {
@@ -74,6 +94,120 @@ function createDelayedJsonBackend(responseText: string, delayMs: number): AgentB
     },
   };
 }
+
+describe('ExecutionRunManager shell-bridge discovery', () => {
+  function createDiscoveryBackend() {
+    const prompts: string[] = [];
+    const backend = createStaticJsonBackend('{"summary":"ok","deliverables":[]}');
+    const send = backend.sendPrompt.bind(backend);
+    backend.sendPrompt = async (sessionId, prompt) => {
+      prompts.push(prompt);
+      await send(sessionId, prompt);
+    };
+    backend.loadSession = async () => ({ sessionId: 'resumed_worker' as SessionId });
+    backend.loadSessionWithReplayCapture = async () => ({
+      sessionId: 'resumed_worker' as SessionId,
+      replay: [],
+    });
+    return { backend, prompts };
+  }
+
+  it('supplies executable discovery with parent authority and worker cwd on bounded start and resume', async () => {
+    const { backend, prompts } = createDiscoveryBackend();
+    const manager = new ExecutionRunManager({
+      parentProvider: 'claude',
+      cwd: '/workspace/worker directory',
+      createBackend: () => backend,
+      sendAcp: () => {},
+    });
+    const started = await manager.start({
+      sessionId: 'authenticated_parent',
+      intent: 'delegate',
+      backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+      instructions: 'Inspect the assigned workspace.',
+      permissionMode: 'read_only',
+      retentionPolicy: 'resumable',
+      runClass: 'bounded',
+      ioMode: 'request_response',
+    });
+    await manager.waitForTerminal(started.runId);
+    expectWorkerDiscovery(prompts[0]!);
+    expect(prompts[0]).toContain('Inspect the assigned workspace.');
+    expect(manager.get(started.runId)?.structuredMeta).toMatchObject({
+      kind: 'delegate_output.v1',
+      payload: { summary: 'ok', deliverables: [] },
+    });
+
+    expect(await manager.send(started.runId, { message: 'Continue the assignment.', resume: true })).toEqual({ ok: true });
+    await manager.waitForTerminal(started.runId);
+    expectWorkerDiscovery(prompts[1]!);
+    expect(prompts[1]).toContain('Continue the assignment.');
+    expect(manager.get(started.runId)?.status).toBe('succeeded');
+  });
+
+  it('supplies discovery on long-lived initial, reused and resumed turns, including a deferred first turn', async () => {
+    const { backend, prompts } = createDiscoveryBackend();
+    const manager = new ExecutionRunManager({
+      parentProvider: 'claude',
+      cwd: '/workspace/worker directory',
+      createBackend: () => backend,
+      sendAcp: () => {},
+    });
+    const start = {
+      sessionId: 'authenticated_parent',
+      intent: 'delegate' as const,
+      backendTarget: { kind: 'builtInAgent' as const, agentId: 'copilot' },
+      permissionMode: 'read_only',
+      retentionPolicy: 'resumable' as const,
+      runClass: 'long_lived' as const,
+      ioMode: 'request_response' as const,
+    };
+    const started = await manager.start({ ...start, instructions: 'Initial assignment.' });
+    expectWorkerDiscovery(prompts[0]!);
+    await flushAsyncEffects();
+    expect(await manager.send(started.runId, { message: 'Follow-up assignment.' })).toEqual({ ok: true });
+    expectWorkerDiscovery(prompts[1]!);
+    expect(prompts[1]).toContain('Follow-up assignment.');
+    await flushAsyncEffects();
+    await manager.stop(started.runId);
+    await manager.waitForTerminal(started.runId);
+    expect(await manager.send(started.runId, { message: 'Resumed assignment.', resume: true })).toEqual({ ok: true });
+    expectWorkerDiscovery(prompts[2]!);
+    await manager.stop(started.runId);
+
+    const deferred = await manager.start(start);
+    expect(prompts).toHaveLength(3);
+    expect(await manager.send(deferred.runId, { message: 'Deferred assignment.' })).toEqual({ ok: true });
+    expectWorkerDiscovery(prompts[3]!);
+    await manager.stop(deferred.runId);
+  });
+
+  it.each([
+    { kind: 'builtInAgent' as const, agentId: 'claude' },
+    { kind: 'configuredAcpBackend' as const, backendId: 'custom-worker' },
+  ])('does not advertise a shell bridge for $kind', async (backendTarget) => {
+    const { backend, prompts } = createDiscoveryBackend();
+    const manager = new ExecutionRunManager({
+      parentProvider: 'copilot',
+      cwd: '/workspace/worker directory',
+      createBackend: () => backend,
+      sendAcp: () => {},
+    });
+    const started = await manager.start({
+      sessionId: 'authenticated_parent',
+      intent: 'delegate',
+      backendTarget,
+      instructions: 'Assignment.',
+      permissionMode: 'read_only',
+      retentionPolicy: 'ephemeral',
+      runClass: 'bounded',
+      ioMode: 'request_response',
+    });
+    await manager.waitForTerminal(started.runId);
+    expect(readBridgeCommands(prompts[0]!)).toEqual([]);
+    expect(manager.get(started.runId)?.status).toBe('succeeded');
+  });
+});
 
 describe('ExecutionRunManager start request idempotency', () => {
   it.each([
@@ -1830,16 +1964,16 @@ describe('ExecutionRunManager (bounded external send)', () => {
 
     const manager = new ExecutionRunManager({
       parentProvider: 'claude',
-      cwd: process.cwd(),
+      cwd: '/workspace/worker directory',
       createBackend: () => backend,
       sendAcp: () => {},
       getNowMs: () => 1_700_000_000_000,
     });
 
     const started = await manager.start({
-      sessionId: 'parent_session_1',
+      sessionId: 'authenticated_parent',
       intent: 'delegate',
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
       instructions: 'original instructions',
       permissionMode: 'read_only',
       retentionPolicy: 'ephemeral',
@@ -1856,6 +1990,8 @@ describe('ExecutionRunManager (bounded external send)', () => {
     expect(sendResult.ok).toBe(true);
 
     await expect.poll(() => prompts.length, { timeout: 1_000 }).toBe(2);
+    expectWorkerDiscovery(prompts[0]!);
+    expectWorkerDiscovery(prompts[1]!);
     expect(prompts[1]).toContain('deliverables');
     expect(prompts[1]).toContain('User update: finish immediately.');
 

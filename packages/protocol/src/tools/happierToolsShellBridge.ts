@@ -1,6 +1,7 @@
 export type HappierToolsShellBridgeCommand =
   | Readonly<{
       kind: 'list';
+      sessionAgentBridge?: boolean;
       rawCommand: string;
       sessionId: string | null;
       directory: string | null;
@@ -8,6 +9,7 @@ export type HappierToolsShellBridgeCommand =
     }>
   | Readonly<{
       kind: 'call';
+      sessionAgentBridge?: boolean;
       rawCommand: string;
       sessionId: string | null;
       directory: string | null;
@@ -109,6 +111,7 @@ function stripLeadingEnvAssignmentTokens(tokens: readonly string[]): string[] {
 }
 
 type ParsedBridgeFlags = Readonly<{
+  sessionAgentBridge: boolean;
   sessionId: string | null;
   directory: string | null;
   source: string | null;
@@ -124,6 +127,7 @@ function parseBridgeFlags(subcommand: 'list' | 'call', tokens: readonly string[]
   let tool: string | null = null;
   let argsJson: string | null = null;
   let json = false;
+  let sessionAgentBridge = false;
   const seen = new Set<string>();
 
   for (let index = 0; index < tokens.length; index++) {
@@ -132,6 +136,9 @@ function parseBridgeFlags(subcommand: 'list' | 'call', tokens: readonly string[]
     seen.add(token);
 
     switch (token) {
+      case '--session-agent-bridge':
+        sessionAgentBridge = true;
+        continue;
       case '--json':
         json = true;
         continue;
@@ -178,7 +185,7 @@ function parseBridgeFlags(subcommand: 'list' | 'call', tokens: readonly string[]
     }
   }
 
-  return { sessionId, directory, source, tool, argsJson, json };
+  return { sessionAgentBridge, sessionId, directory, source, tool, argsJson, json };
 }
 
 function normalizeHappierToolsTokens(tokens: readonly string[]): string[] | null {
@@ -212,6 +219,7 @@ export function parseHappierToolsShellBridgeCommand(command: string): HappierToo
   if (subcommand === 'list') {
     return {
       kind: 'list',
+      ...(flags.sessionAgentBridge ? { sessionAgentBridge: true } : {}),
       rawCommand,
       sessionId: flags.sessionId,
       directory: flags.directory,
@@ -233,6 +241,7 @@ export function parseHappierToolsShellBridgeCommand(command: string): HappierToo
 
   return {
     kind: 'call',
+    ...(flags.sessionAgentBridge ? { sessionAgentBridge: true } : {}),
     rawCommand,
     sessionId: flags.sessionId,
     directory: flags.directory,

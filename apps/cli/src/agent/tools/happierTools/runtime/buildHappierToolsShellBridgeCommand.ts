@@ -31,6 +31,7 @@ export function buildHappierToolsShellBridgeCommand(args: readonly string[]): st
 
 function buildCanonicalBridgeArgs(command: HappierToolsShellBridgeCommand): string[] {
   const args: string[] = [command.kind];
+  if (command.sessionAgentBridge) args.push('--session-agent-bridge');
   if (command.sessionId) args.push('--session-id', command.sessionId);
   if (command.directory) args.push('--directory', command.directory);
   if (command.kind === 'call') {

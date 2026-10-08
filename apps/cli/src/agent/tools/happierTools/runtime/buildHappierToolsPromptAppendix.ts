@@ -5,26 +5,28 @@ import type { CodingPromptSessionTitleUpdatesModeV1 } from '@happier-dev/protoco
 export function buildHappierToolsPromptAppendix(params: Readonly<{
   sessionId: string;
   directory: string;
+  sessionAgentBridge?: boolean;
   sessionTitleUpdatesMode?: CodingPromptSessionTitleUpdatesModeV1;
   memoryRecallGuidance?: Readonly<{
     enabled?: boolean;
     machineId?: string | null;
   }>;
 }>): string {
-  const listCommand = buildHappierToolsShellBridgeCommand([
-    'list',
+  const contextArgs = [
+    ...(params.sessionAgentBridge ? ['--session-agent-bridge'] : []),
     '--session-id',
     params.sessionId,
     '--directory',
     params.directory,
+  ];
+  const listCommand = buildHappierToolsShellBridgeCommand([
+    'list',
+    ...contextArgs,
     '--json',
   ]);
   const renameCommand = buildHappierToolsShellBridgeCommand([
     'call',
-    '--session-id',
-    params.sessionId,
-    '--directory',
-    params.directory,
+    ...contextArgs,
     '--source',
     'happier',
     '--tool',
@@ -38,10 +40,7 @@ export function buildHappierToolsPromptAppendix(params: Readonly<{
     : '';
   const memorySearchCommand = buildHappierToolsShellBridgeCommand([
     'call',
-    '--session-id',
-    params.sessionId,
-    '--directory',
-    params.directory,
+    ...contextArgs,
     '--source',
     'happier',
     '--tool',
@@ -60,10 +59,7 @@ export function buildHappierToolsPromptAppendix(params: Readonly<{
   ]);
   const memoryWindowCommand = buildHappierToolsShellBridgeCommand([
     'call',
-    '--session-id',
-    params.sessionId,
-    '--directory',
-    params.directory,
+    ...contextArgs,
     '--source',
     'happier',
     '--tool',
@@ -130,6 +126,21 @@ Do not merely describe the command or say that you plan to rename the session la
     : `
 Use \`${renameCommand}\` to rename the session.
 `;
+  const workerCallGuidance = params.sessionAgentBridge
+    ? `Use \`${buildHappierToolsShellBridgeCommand([
+      'call',
+      ...contextArgs,
+      '--source',
+      '<source>',
+      '--tool',
+      '<tool>',
+      '--args-json',
+      '<json>',
+      '--json',
+    ])}\` as the call template, replacing the placeholders with the discovered source, tool name and JSON matching its listed inputSchema. Keep the session-agent bridge flag and host session context on calls. For action-backed capabilities, prefer the listed \`action_execute\` tool with the canonical \`actionId\` and \`input\`; advertised action aliases may not be directly callable on this surface.
+
+`
+    : '';
 
   return `Happier tools are available through the CLI bridge for this provider. They are not exposed as native tools in the provider tool inventory.
 ${titleGuidance}
@@ -137,7 +148,7 @@ ${titleGuidance}
 Use \`${listCommand}\` when you need to discover the available built-in Happier tools and custom configured tools.
 ${renameCommandGuidance}
 
-${memoryGuidance ? `${memoryGuidance}
+${workerCallGuidance}${memoryGuidance ? `${memoryGuidance}
 
 ` : ''}For any other Happier or custom tool, call the same CLI bridge form with \`call --source <source> --tool <tool> --args-json '<json>' --json\`. Use the listed tool \`name\` verbatim for \`--tool\`; ActionSpec IDs (for example, \`subagents.delegate.start\`) are not tool names. If you start from an ActionSpec ID, invoke the listed \`action_execute\` tool and pass the ID as \`actionId\` in \`--args-json\`. When a custom tool is written as \`<source>/<tool>\`, pass the part before the slash to \`--source\` and the part after the slash to \`--tool\`.
 
