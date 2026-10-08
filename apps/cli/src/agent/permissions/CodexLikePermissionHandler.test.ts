@@ -617,7 +617,7 @@ describe('CodexLikePermissionHandler', () => {
     );
   });
 
-  it('auto-approves a locally generated Happier tools shell-bridge command even in read-only mode', async () => {
+  it.each([false, true])('auto-approves locally generated discovery in read-only mode (session-agent=%s)', async (sessionAgentBridge) => {
     const session = new FakeSession();
     const handler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });
     handler.setPermissionMode('read-only');
@@ -628,6 +628,7 @@ describe('CodexLikePermissionHandler', () => {
     const result = await handler.handleToolCall('tool-1', 'bash', {
       command: buildHappierToolsShellBridgeCommand([
         'list',
+        ...(sessionAgentBridge ? ['--session-agent-bridge'] : []),
         '--session-id',
         'cmmfivqgm002d8o1ug15b02o1',
         '--directory',

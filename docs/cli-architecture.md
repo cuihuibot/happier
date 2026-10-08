@@ -485,6 +485,21 @@ publishes a new structured result and terminal state while retaining the vendor
 session. Completion/disposal rejects overlapping resume requests as busy, and
 turn limits remain cumulative even after explicit rehydration. Long-lived turns
 remain nonterminal and deliver output to the sidechain.
+Execution-run prompt delivery reuses the normal Happier tools appendix for
+catalog-declared shell-bridge Agents. Bounded initial, interrupt, and resumed
+turns and long-lived initial, follow-up, and resumed turns receive discovery
+and call guidance with the authenticated host-parent session ID and the worker
+directory. Calls retain `--session-agent-bridge` and use `--args-json` with the
+listed tool schema; action-backed capabilities use `action_execute` and the
+canonical action ID rather than assuming advertised aliases are callable.
+The shell-command parser retains the session-agent surface flag during
+trusted launcher reconstruction and managed-tool labeling; legacy commands
+without the flag retain their existing parsed shape and admission behavior.
+Worker guidance disables title updates because the bridge targets the parent,
+not a separately titled Happier session. Native-MCP and unsupported Agents keep
+their existing prompts. This source behavior requires an updated host runtime;
+per-run guidance supplied to an older host is a diagnostic workaround, not
+automatic activation of the source correction.
 Per-run bounded timeout overrides are retained across resume. A resume rejected
 as `execution_run_busy` during prior-turn teardown can be retried after cleanup.
 Reattaching a session refreshes its CLI version from the new process while
