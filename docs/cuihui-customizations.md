@@ -21,6 +21,23 @@ details from earlier public Git history.
 
 ## Maintained behavior
 
+### Operator-managed desktop updates
+
+Custom desktop production exports can set
+`EXPO_PUBLIC_HAPPIER_DESKTOP_UPDATES_ENABLED=0` to keep the normal updater idle
+and block both check and install commands. The canonical owner is
+`apps/ui/sources/desktop/updates/useDesktopUpdater.ts`; its static environment
+property access lets Expo embed the build-time policy. Unset or explicitly
+enabled production builds retain normal updater behavior. Native updater
+commands and feed configuration are unchanged.
+
+`apps/ui/sources/desktop/updates/useDesktopUpdater.test.ts` executes the real
+Expo production transform with an empty runtime environment to cover disabled,
+enabled and default policy. See
+[custom desktop release guidance](release-process.md#operator-managed-custom-desktop-updates)
+for export/rebuild requirements. Target-specific manual deployment and recovery
+remain outside the product repository.
+
 ### Managed worker names (development)
 
 Managed plan/delegate runs share the optional display contract described in

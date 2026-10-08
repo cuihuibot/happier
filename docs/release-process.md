@@ -261,3 +261,29 @@ For the server, database migrations should be automated as part of the deploymen
 - When an application platform cannot run and await a blocking pre-deploy operation, designate exactly one API service as the migration owner and set `RUN_MIGRATIONS=0` on workers and all other replicas. Protect that owner with start-first rollout, rollback on failure, and sufficient health-check startup grace; webhook acceptance alone does not prove migration or deployment completion.
 - Do not rely on API and worker startup races as migration ownership. Prisma's database lock serializes contenders, but it cannot preserve the winning migration when an orchestrator terminates that container for missing its startup-health window.
 - Avoid running migrations at image build-time (Dockerfile), since migrations require a live DB connection.
+
+## Operator-managed custom desktop updates
+
+Custom desktop bundles that must not consume the upstream stable updater feed
+must export the production frontend with
+`EXPO_PUBLIC_HAPPIER_DESKTOP_UPDATES_ENABLED=0`. This build-time policy keeps
+the desktop updater idle and blocks both refresh and install commands; it is
+not a persisted badge dismissal. Set the flag on the Expo export (including
+Tauri's `beforeBuildCommand` when that command performs the export), not only
+when launching an already packaged app. Re-export and rebuild the signed
+native bundle after changing the policy.
+
+Keep `EXPO_PUBLIC_` reads in static property notation so Expo embeds their
+values. Verify the production export, not just an unbundled development hook.
+The updater hook tests execute the actual Expo production transform without
+runtime environment values and cover disabled, explicitly enabled, and default
+production policy. Ordinary production builds with the flag unset still check
+and install updates; source development bundles remain disabled by default.
+
+Until a separately authorized, reviewed custom feed exists, upgrade these
+custom desktops manually through the operator's normal signed-bundle backup,
+graceful quit, replacement, readback, and relaunch procedure. Preserve the
+native bundle/data identity and required customization provenance. Do not
+inflate versions to suppress updates or remove feed endpoints as a substitute
+for this policy: an invalid updater configuration can surface a retryable
+error instead of manual-update mode.

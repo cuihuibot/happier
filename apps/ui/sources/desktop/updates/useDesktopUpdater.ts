@@ -19,7 +19,6 @@ type UpdateMetadata = {
 } | null;
 
 const DISMISS_KEY = 'desktop_update_dismissed_version';
-const UPDATE_CHECKS_ENABLED_ENV = 'EXPO_PUBLIC_HAPPIER_DESKTOP_UPDATES_ENABLED';
 
 function parseOptionalBoolean(raw: string | undefined): boolean | null {
     const normalized = String(raw ?? '').trim().toLowerCase();
@@ -30,7 +29,8 @@ function parseOptionalBoolean(raw: string | undefined): boolean | null {
 }
 
 function readDesktopUpdateChecksEnabledOverride(): boolean | null {
-    return parseOptionalBoolean(process.env[UPDATE_CHECKS_ENABLED_ENV]);
+    // Expo only embeds EXPO_PUBLIC values accessed with static property notation.
+    return parseOptionalBoolean(process.env.EXPO_PUBLIC_HAPPIER_DESKTOP_UPDATES_ENABLED);
 }
 
 function isDevelopmentBundle(): boolean {
