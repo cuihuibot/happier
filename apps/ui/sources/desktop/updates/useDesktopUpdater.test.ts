@@ -1,9 +1,16 @@
+import { transformSync } from '@babel/core';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 
 import { useDesktopUpdater } from './useDesktopUpdater';
+import * as updaterState from './state';
+import * as tauri from '@/utils/platform/tauri';
 
 type DesktopStorage = ReturnType<typeof createLocalStorage>;
 type TauriInvoke = (command: string, args?: Record<string, unknown>) => unknown | Promise<unknown>;
@@ -63,6 +70,46 @@ async function renderDesktopUpdaterHook(options: {
     return renderHook(() => useDesktopUpdater());
 }
 
+function productionUpdaterHook(enabled: string | undefined): typeof useDesktopUpdater {
+    if (enabled === undefined) {
+        delete process.env[UPDATE_CHECKS_ENV];
+    } else {
+        process.env[UPDATE_CHECKS_ENV] = enabled;
+    }
+    const filename = resolve('sources/desktop/updates/useDesktopUpdater.ts');
+    const caller = {
+        name: 'metro',
+        bundler: 'metro',
+        platform: 'web',
+        isDev: false,
+        isServer: false,
+        supportsStaticESM: false,
+    };
+    const compiled = transformSync(readFileSync(filename, 'utf8'), {
+        filename,
+        babelrc: false,
+        configFile: false,
+        presets: ['babel-preset-expo'],
+        envName: 'production',
+        caller,
+    });
+    if (!compiled?.code) throw new Error('Expo production transform returned no code');
+    const exports: { useDesktopUpdater?: typeof useDesktopUpdater } = {};
+    runInNewContext(compiled.code, {
+        exports,
+        __DEV__: false,
+        process: { env: {} },
+        require: (id: string) => {
+            if (id === 'react') return React;
+            if (id === './state') return updaterState;
+            if (id === '@/utils/platform/tauri') return tauri;
+            throw new Error(`Unexpected production dependency: ${id}`);
+        },
+    });
+    if (!exports.useDesktopUpdater) throw new Error('Production updater hook was not exported');
+    return exports.useDesktopUpdater;
+}
+
 describe('useDesktopUpdater (hook)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -115,6 +162,46 @@ describe('useDesktopUpdater (hook)', () => {
         expect(invokeMock).not.toHaveBeenCalled();
         expect(latest?.status).toBe('idle');
         expect(latest?.availableVersion).toBe(null);
+    });
+
+    it('embeds disabled production policy and blocks mount, refresh and install commands', async () => {
+        const productionHook = productionUpdaterHook('0');
+        const invokeMock = vi.fn(async () => ({
+            version: '0.2.12',
+            currentVersion: '0.2.12-custom.1',
+            notes: null,
+            pubDate: null,
+        }));
+        setDesktopGlobals({ storage: createLocalStorage(), invokeMock, isDesktop: true });
+        const hook = await renderHook(() => productionHook());
+        await act(async () => {
+            await hook.getCurrent()?.refresh();
+            await hook.getCurrent()?.startInstall();
+        });
+        expect(invokeMock).not.toHaveBeenCalled();
+        expect(hook.getCurrent()?.status).toBe('idle');
+        expect(hook.getCurrent()?.availableVersion).toBe(null);
+        expect(hook.getCurrent()?.error).toBe(null);
+    });
+
+    it.each([undefined, '1'])('preserves production check and install with policy %s', async (enabled) => {
+        const productionHook = productionUpdaterHook(enabled);
+        const invokeMock = vi.fn(async (command: string) => {
+            if (command === 'desktop_fetch_update') {
+                return { version: '0.2.12', currentVersion: '0.2.11', notes: null, pubDate: null };
+            }
+            if (command === 'desktop_install_update') return false;
+            throw new Error(`Unexpected command: ${command}`);
+        });
+        setDesktopGlobals({ storage: createLocalStorage(), invokeMock, isDesktop: true });
+        const hook = await renderHook(() => productionHook());
+        expect(hook.getCurrent()?.status).toBe('available');
+        await act(async () => {
+            await hook.getCurrent()?.startInstall();
+        });
+        expect(invokeMock).toHaveBeenCalledWith('desktop_fetch_update', undefined);
+        expect(invokeMock).toHaveBeenCalledWith('desktop_install_update', undefined);
+        expect(hook.getCurrent()?.status).toBe('upToDate');
     });
 
     it('exposes an available update when updater returns metadata', async () => {
