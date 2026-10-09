@@ -30,15 +30,22 @@ function getShellPathBasename(token: string): string {
   return lastSlashIndex >= 0 ? normalized.slice(lastSlashIndex + 1) : normalized;
 }
 
+function isHappierExecutableToken(token: string): boolean {
+  const base = getShellPathBasename(token);
+  return base === 'happier' || base === 'happier.exe';
+}
+
 function isRuntimeExecutableToken(token: string): boolean {
   const base = getShellPathBasename(token);
-  return base === 'node' || base === 'node.exe' || base === 'bun' || base === 'bun.exe';
+  return base === 'node' || base === 'node.exe' || base === 'bun' || base === 'bun.exe'
+    || isHappierExecutableToken(token);
 }
 
 function isLikelyHappierCliEntrypointToken(token: string): boolean {
   const normalized = normalizeShellPathLike(token);
   const base = getShellPathBasename(token);
   if (base.includes('happier')) return true;
+  if (normalized.endsWith('/package-dist/index.mjs')) return true;
   if (normalized.includes('/@happier-dev/cli/')) return true;
   if (normalized.includes('/apps/cli/')) return true;
   return (base === 'index.mjs' || base === 'index.ts') && normalized.includes('/cli/');
@@ -190,7 +197,9 @@ function parseBridgeFlags(subcommand: 'list' | 'call', tokens: readonly string[]
 
 function normalizeHappierToolsTokens(tokens: readonly string[]): string[] | null {
   if (tokens.length < 3) return null;
-  if (tokens[0] === 'happier' && tokens[1] === 'tools') return [...tokens];
+  if (isHappierExecutableToken(tokens[0] ?? '') && tokens[1] === 'tools') {
+    return ['happier', ...tokens.slice(1)];
+  }
   if (!isRuntimeExecutableToken(tokens[0] ?? '')) return null;
 
   for (let index = 1; index < tokens.length - 2; index++) {

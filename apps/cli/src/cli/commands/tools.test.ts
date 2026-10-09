@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { handleToolsCommand } from './tools';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
+import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { accountSettingsParse, getActionSpec } from '@happier-dev/protocol';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 
 function createBaseDeps() {
   return {
@@ -10,12 +15,97 @@ function createBaseDeps() {
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
     }),
     initializeBackendApiContext: async () => ({ api: {} as any, machineId: 'machine-1' }),
-    bootstrapAccountSettingsContext: async () => ({ settings: {}, source: 'network', settingsVersion: 1, loadedAtMs: 1, whenRefreshed: null }),
+    bootstrapAccountSettingsContext: async () => ({
+      settings: accountSettingsParse({}), source: 'network' as const, settingsVersion: 1,
+      loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null,
+    }),
     resolveCustomHappierToolsContext: async () => ({ mcpServers: {}, warnings: [] }),
   };
 }
 
 describe('happier tools --json', () => {
+  it.each(['direct', 'disabled'] as const)('honors callback exposure policy during session-agent discovery (%s)', async (policy) => {
+    const envScope = createEnvKeyScope(['HAPPIER_ACTIONS_SETTINGS_V1']);
+    const output = captureStdoutJsonOutput();
+    const previousExitCode = process.exitCode;
+    envScope.patch({
+      HAPPIER_ACTIONS_SETTINGS_V1: JSON.stringify({
+        v: 1,
+        actions: {
+          'session.message.send': policy === 'direct'
+            ? { toolExposureModes: { session_agent: 'direct' } }
+            : { disabledSurfaces: ['session_agent'] },
+        },
+      }),
+    });
+    try {
+      await handleToolsCommand(['list', '--session-agent-bridge', '--session-id', 'host-parent', '--json'], {
+        ...createBaseDeps(),
+        listResolvedCustomHappierTools: async () => ({ tools: [], warnings: [] }),
+      });
+      const tools = output.json<{ data: { sources: { happier: Array<{ name: string }> } } }>().data.sources.happier;
+      expect(tools.some((tool) => tool.name === 'session_message_send')).toBe(policy === 'direct');
+      expect(tools.some((tool) => tool.name === 'action_execute')).toBe(true);
+    } finally {
+      output.restore();
+      envScope.restore();
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it.each([false, true])('discovers a callable nonblocking callback route on the same surface (session-agent=%s)', async (sessionAgentBridge) => {
+    const output = captureStdoutJsonOutput();
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const surface = sessionAgentBridge ? 'session_agent' : 'cli';
+    const acknowledged = { ok: true, sessionId: 'host-parent', localId: 'callback-ack', waited: false };
+    const sent: unknown[] = [];
+    const { executor } = createCliActionExecutorHarness({
+      token: 'fixture-token',
+      sessionId: 'host-parent',
+      ctx: { encryptionKey: new Uint8Array(32).fill(1), encryptionVariant: 'legacy' },
+    }, {
+      sessionSendMessage: async (input) => {
+        sent.push(input);
+        return acknowledged;
+      },
+    });
+    const bridge = createActionToolExecutorBridge({ executor, surface });
+    try {
+      await handleToolsCommand([
+        'list', ...(sessionAgentBridge ? ['--session-agent-bridge'] : []),
+        '--session-id', 'host-parent', '--directory', '/workspace/worker', '--json',
+      ], {
+        ...createBaseDeps(),
+        listResolvedCustomHappierTools: async () => ({ tools: [], warnings: [] }),
+      });
+      const listed = output.json<{ data: { sources: { happier: Array<{ name: string }> } } }>().data.sources.happier;
+      const directCallback = listed.find((tool) => tool.name === 'session_message_send');
+      const toolName = directCallback ? directCallback.name : 'action_execute';
+      expect(listed.some((tool) => tool.name === toolName)).toBe(true);
+      const input = getActionSpec('session.message.send').inputSchema.parse({
+        sessionId: 'host-parent', message: 'Done', wait: false,
+      });
+      const result = await dispatchBuiltInHappierTool({
+        toolName,
+        args: directCallback ? input : { actionId: 'session.message.send', input },
+        sessionId: 'host-parent',
+        surface,
+        deps: {
+          ...bridge,
+          resolveActionOptions: (args) => bridge.resolveActionOptions(args, 'host-parent'),
+          changeTitle: async () => { throw new Error('Callback must not change the title'); },
+          startExecutionRun: async () => { throw new Error('Callback must not start a worker'); },
+        },
+      });
+      expect(result).toEqual({ ok: true, result: acknowledged });
+      expect(sent).toEqual([expect.objectContaining({ sessionId: 'host-parent', message: 'Done', wait: false })]);
+    } finally {
+      output.restore();
+      process.exitCode = previousExitCode;
+    }
+  });
+
   it('prints a tools_list JSON envelope grouped by source', async () => {
     const output = captureStdoutJsonOutput();
     const initializeBackendApiContext = vi.fn(async () => ({ api: {} as any, machineId: 'machine-1' }));
