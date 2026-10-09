@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
-import { AIBackendProfileSchema, FeaturesResponseSchema, type ExecutionRunPublicState, type ExecutionRunStartResponse } from '@happier-dev/protocol';
+import { AIBackendProfileSchema, FeaturesResponseSchema, type ExecutionRunGetResponse, type ExecutionRunListResponse, type ExecutionRunPublicState, type ExecutionRunStartResponse } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import type {
@@ -19,6 +19,7 @@ import { registerExecutionRunHandlers as registerExecutionRunHandlersBase } from
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { runGit } from '@/scm/rpc/__tests__/testRpcHarness';
 import { reloadConfiguration } from '@/configuration';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 
 vi.mock('@/persistence', () => ({
   readCredentials: vi.fn(),
@@ -316,6 +317,117 @@ function createCancelRaceBackend(params: Readonly<{
 }
 
 describe('executionRuns session RPC handlers', () => {
+  it.each([
+    { override: false, accountDefault: true, effective: false },
+    { override: true, accountDefault: false, effective: true },
+    { override: undefined, accountDefault: true, effective: true },
+    { override: undefined, accountDefault: false, effective: false },
+  ])('preserves normal delegation notification policy through encrypted RPC ($override, $accountDefault)', async ({ override, accountDefault, effective }) => {
+    const accountSettings = { executionRunsNotifyParentOnCompletionDefault: accountDefault };
+    const parentInputs: Array<{ text: string; meta: Record<string, unknown> }> = [];
+    const client = createEncryptedRpcTestClient({
+      scopePrefix: 'parent',
+      registerHandlers: (rpc) => registerExecutionRunHandlers(rpc, {
+        sessionId: 'parent', cwd: process.cwd(), parentProvider: 'copilot',
+        createBackend: () => createStaticBackend('{"summary":"result","deliverables":[]}'),
+        sendAcp: () => {},
+        resolveAccountSettings: () => accountSettings,
+        enqueueParentSessionInput: async (input) => { parentInputs.push(input); },
+      }),
+    });
+    let started: ExecutionRunStartResponse | undefined;
+    const { executor } = createCliActionExecutorHarness({
+      token: 'fixture',
+      sessionId: 'parent',
+      ctx: { encryptionKey: new Uint8Array(32).fill(1), encryptionVariant: 'legacy' },
+    }, {
+      executionRunStart: async (_sessionId, request) => {
+        started = await client.call<ExecutionRunStartResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_START, request);
+        return started;
+      },
+    });
+    const action = await executor.execute('subagents.delegate.start', {
+      backendTargetKeys: ['agent:copilot'],
+      instructions: 'Return a result.', permissionMode: 'read_only', retentionPolicy: 'resumable',
+      runClass: 'bounded', ioMode: 'request_response',
+      ...(override !== undefined ? { notifyParentOnCompletion: override } : {}),
+      waitForCompletion: false,
+    }, {
+      surface: 'session_agent', defaultSessionId: 'parent', callerPermissionMode: 'read_only',
+    });
+    expect(action).toMatchObject({ ok: true, result: { results: [{ ok: true }] } });
+    if (!started) throw new Error('Normal delegation did not reach the encrypted start boundary');
+    const runId = started.runId;
+    expect(runId).toMatch(/^run_/);
+    await vi.waitFor(async () => {
+      const got = await client.call<ExecutionRunGetResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_GET, {
+        runId,
+      });
+      expect(got.run).toMatchObject({
+        status: 'succeeded', notifyParentOnCompletion: effective,
+      });
+      expect(got.latestToolResult).toMatchObject({ summary: 'result' });
+      expect(parentInputs).toHaveLength(effective ? 1 : 0);
+    });
+    const listed = await client.call<ExecutionRunListResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, {});
+    expect(listed.runs).toContainEqual(expect.objectContaining({
+      runId, status: 'succeeded', notifyParentOnCompletion: effective,
+    }));
+    expect(accountSettings).toEqual({ executionRunsNotifyParentOnCompletionDefault: accountDefault });
+  });
+
+  it.each(['false', 0, null])('rejects an invalid notification policy through encrypted RPC (%s)', async (override) => {
+    const createBackend = vi.fn(() => createStaticBackend('{"summary":"result","deliverables":[]}'));
+    const client = createEncryptedRpcTestClient({
+      scopePrefix: 'parent',
+      registerHandlers: (rpc) => registerExecutionRunHandlers(rpc, {
+        sessionId: 'parent', cwd: process.cwd(), parentProvider: 'copilot',
+        createBackend, sendAcp: () => {},
+      }),
+    });
+    const response = await client.call<{ ok: boolean; errorCode: string }, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+      intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+      permissionMode: 'read_only', retentionPolicy: 'resumable',
+      runClass: 'bounded', ioMode: 'request_response',
+      notifyParentOnCompletion: override,
+    });
+    expect(response).toMatchObject({ ok: false, errorCode: 'execution_run_invalid_action_input' });
+    expect(createBackend).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('retains failed run content independently of terminal notification (%s)', async (policy) => {
+    const parentInputs: Array<{ text: string; meta: Record<string, unknown> }> = [];
+    const client = createEncryptedRpcTestClient({
+      scopePrefix: 'parent',
+      registerHandlers: (rpc) => registerExecutionRunHandlers(rpc, {
+        sessionId: 'parent', cwd: process.cwd(), parentProvider: 'copilot',
+        createBackend: () => ({
+          ...createStaticBackend(''),
+          async sendPrompt() { throw new Error('Provider fixture failure'); },
+        }),
+        sendAcp: () => {},
+        enqueueParentSessionInput: async (input) => { parentInputs.push(input); },
+      }),
+    });
+    const started = await client.call<ExecutionRunStartResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+      intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+      permissionMode: 'read_only', retentionPolicy: 'resumable',
+      runClass: 'bounded', ioMode: 'request_response', notifyParentOnCompletion: policy,
+    });
+    await vi.waitFor(async () => {
+      const got = await client.call<ExecutionRunGetResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_GET, {
+        runId: started.runId,
+      });
+      expect(got.run).toMatchObject({
+        status: 'failed', notifyParentOnCompletion: policy, error: { code: 'execution_run_failed' },
+      });
+      expect(got.latestToolResult).toMatchObject({
+        status: 'failed', error: { code: 'execution_run_failed' },
+      });
+      expect(parentInputs).toHaveLength(policy ? 1 : 0);
+    });
+  });
+
   it('resolves a saved native worker name at the encrypted host boundary before applying defaults', async () => {
     const { readCredentials } = await import('@/persistence');
     vi.mocked(readCredentials).mockResolvedValue({ token: 'fixture', encryption: { type: 'legacy', secret: new Uint8Array(32) } });

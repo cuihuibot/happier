@@ -61,6 +61,9 @@ export async function writeExecutionRunActivityMarker(args: Readonly<{
     runClass: run.runClass,
     ioMode: run.ioMode,
     retentionPolicy: run.retentionPolicy,
+    ...(typeof run.notifyParentOnCompletion === 'boolean'
+      ? { notifyParentOnCompletion: run.notifyParentOnCompletion }
+      : {}),
     status: run.status,
     startedAtMs: run.startedAtMs,
     updatedAtMs: args.nowMs,

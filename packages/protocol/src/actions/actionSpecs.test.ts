@@ -51,6 +51,17 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
 ] as const;
 
 describe('saved native worker tool contracts', () => {
+  it.each(['subagents.delegate.start', 'subagents.plan.start', 'voice_agent.start', 'execution.run.start'] as const)(
+    '%s advertises an optional notification control through action discovery',
+    (id) => {
+      expect(serializeActionSpec(getActionSpec(id)).inputHints?.fields).toContainEqual(expect.objectContaining({
+        path: 'notifyParentOnCompletion',
+        widget: 'toggle',
+        required: false,
+      }));
+    },
+  );
+
   it.each(['subagents.delegate.start', 'subagents.plan.start', 'execution.run.start'] as const)(
     '%s accepts profile-only targeting without inserting defaults ahead of resolution',
     (id) => {

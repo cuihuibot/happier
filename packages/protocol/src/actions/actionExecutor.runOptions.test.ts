@@ -42,6 +42,61 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor model/effort run-option parity', () => {
+  it.each(['subagents.delegate.start', 'subagents.plan.start', 'voice_agent.start'] as const)(
+    '%s preserves explicit completion-notification overrides across fanout',
+    async (actionId) => {
+      const requests: Array<Record<string, unknown>> = [];
+      const executor = createActionExecutor(createDeps({
+        executionRunStart: async (_sessionId, request) => {
+          requests.push(request);
+          return { runId: `run_${requests.length}` };
+        },
+      }));
+
+      for (const notifyParentOnCompletion of [false, true, undefined]) {
+        requests.length = 0;
+        const result = await executor.execute(actionId, {
+          backendTargetKeys: ['agent:copilot', 'agent:codex'],
+          instructions: 'Return the result to the parent.',
+          ...(notifyParentOnCompletion !== undefined ? { notifyParentOnCompletion } : {}),
+        }, { defaultSessionId: 'parent' });
+
+        expect(result.ok).toBe(true);
+        expect(requests).toHaveLength(2);
+        for (const request of requests) {
+          if (notifyParentOnCompletion === undefined) {
+            expect(request).not.toHaveProperty('notifyParentOnCompletion');
+          } else {
+            expect(request.notifyParentOnCompletion).toBe(notifyParentOnCompletion);
+          }
+        }
+      }
+    },
+  );
+
+  it.each(['subagents.delegate.start', 'execution.run.start'] as const)(
+    '%s rejects a nonboolean completion-notification override before starting',
+    async (actionId) => {
+      const start = vi.fn(async () => ({}));
+      const executor = createActionExecutor(createDeps({ executionRunStart: start }));
+      const result = await executor.execute(actionId, {
+        instructions: 'Return the result.',
+        ...(actionId === 'execution.run.start' ? {
+          intent: 'delegate',
+          backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+          permissionMode: 'read_only',
+          retentionPolicy: 'ephemeral',
+          runClass: 'bounded',
+          ioMode: 'request_response',
+        } : { backendTargetKeys: ['agent:copilot'] }),
+        notifyParentOnCompletion: 'false',
+      }, { defaultSessionId: 'parent' });
+
+      expect(result.ok).toBe(false);
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(['voice-profile', null])('preserves the existing voice profile meaning without native-worker resolution (%s)', async (profileId) => {
     const start = vi.fn(async () => ({ runId: 'voice-run' }));
     const executor = createActionExecutor(createDeps({ executionRunStart: start }));

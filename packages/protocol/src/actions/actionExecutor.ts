@@ -1769,6 +1769,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                 retentionPolicy: (parsed.data as any).retentionPolicy ?? 'ephemeral',
                 runClass: (parsed.data as any).runClass ?? 'bounded',
                 ioMode: (parsed.data as any).ioMode ?? 'request_response',
+                ...(typeof parsed.data.notifyParentOnCompletion === 'boolean'
+                  ? { notifyParentOnCompletion: parsed.data.notifyParentOnCompletion }
+                  : {}),
                 launchOrigin: resolveExecutionRunLaunchOrigin(ctx),
                 ...(connectedServices ? { connectedServices } : {}),
                 ...(connectedServicesDefaultServiceIds.length > 0
