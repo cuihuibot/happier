@@ -2,6 +2,30 @@ import { describe, expect, it } from 'vitest';
 
 import { normalizeExecutionRunStartToolInput } from './manualToolContracts';
 
+describe('normalizeExecutionRunStartToolInput completion notifications', () => {
+  it.each([false, true, undefined])('preserves the per-run override or omission %s on the legacy path', (notifyParentOnCompletion) => {
+    const result = normalizeExecutionRunStartToolInput({
+      sessionId: 'parent',
+      args: { intent: 'review', backendId: 'codex',
+        ...(notifyParentOnCompletion !== undefined ? { notifyParentOnCompletion } : {}) },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.request.notifyParentOnCompletion).toBe(notifyParentOnCompletion);
+    expect(Object.hasOwn(result.request, 'notifyParentOnCompletion')).toBe(notifyParentOnCompletion !== undefined);
+  });
+
+  it('rejects a nonboolean override rather than silently using the account default', () => {
+    const result = normalizeExecutionRunStartToolInput({
+      sessionId: 'parent',
+      args: { intent: 'review', backendId: 'codex', notifyParentOnCompletion: 'false' },
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_action_input' });
+  });
+});
+
 describe('normalizeExecutionRunStartToolInput connected-services error contract (R4-3)', () => {
   it('rejects a malformed connected-services selection with invalid_parameters (canonical actionspec contract)', () => {
     const result = normalizeExecutionRunStartToolInput({

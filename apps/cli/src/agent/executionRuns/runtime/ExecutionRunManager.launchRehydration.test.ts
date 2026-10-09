@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import type { AgentBackend, AgentMessageHandler, SessionId, StartSessionResult } from '@/agent/core/AgentBackend';
 import type { ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
@@ -8,6 +10,8 @@ import type {
 } from '@/session/runtimeActivity/types';
 
 import { ExecutionRunManager } from '@/agent/executionRuns/runtime/ExecutionRunManager';
+import { configuration } from '@/configuration';
+import { resolveReleaseRingScopedBasename } from '@/cli/runtime/publicReleaseChannel';
 
 const SELECTION: ConnectedServiceBindingsV1 = {
   v: 1,
@@ -94,9 +98,16 @@ describe('ExecutionRunManager — resume rehydrates the immutable launch record'
     }
   });
 
-  it('completes each resumed bounded turn with a fresh structured result in the same vendor session', async () => {
+  it.each([
+    { override: false, accountDefault: true, effective: false },
+    { override: true, accountDefault: false, effective: true },
+    { override: undefined, accountDefault: true, effective: true },
+    { override: undefined, accountDefault: false, effective: false },
+  ])('completes each resumed bounded turn with a fresh structured result and retained policy ($override, $accountDefault)', async ({ override, accountDefault, effective }) => {
     let turn = 0;
     const loaded: string[] = [];
+    const parentInputs: Array<{ text: string; meta: Record<string, unknown> }> = [];
+    const accountSettings = { executionRunsNotifyParentOnCompletionDefault: accountDefault };
     const manager = new ExecutionRunManager({
       parentProvider: 'copilot',
       cwd: process.cwd(),
@@ -118,14 +129,24 @@ describe('ExecutionRunManager — resume rehydrates the immutable launch record'
         };
       },
       sendAcp: () => {},
+      enqueueParentSessionInput: async (input) => { parentInputs.push(input); },
+      resolveAccountSettings: () => accountSettings,
     });
     const started = await manager.start({
       sessionId: 'parent_1', intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
       instructions: 'Return a result.', permissionMode: 'read_only', retentionPolicy: 'resumable',
       runClass: 'bounded', ioMode: 'request_response',
+      accountSettings,
+      ...(override !== undefined ? { notifyParentOnCompletion: override } : {}),
     });
+    const markerPath = join(configuration.happyHomeDir, 'tmp',
+      resolveReleaseRingScopedBasename('daemon-execution-runs', configuration.publicReleaseRing),
+      `run-${started.runId}.json`);
+    const readMarker = async () => JSON.parse(await readFile(markerPath, 'utf8'));
     await manager.waitForTerminal(started.runId);
     expect(manager.getLatestToolResult(started.runId)).toMatchObject({ summary: 'turn-1' });
+    expect(await readMarker()).toMatchObject({ status: 'succeeded', notifyParentOnCompletion: effective });
+    accountSettings.executionRunsNotifyParentOnCompletionDefault = !accountDefault;
     for (const expected of [2, 3]) {
       expect(await manager.send(started.runId, { message: 'Continue.', resume: true })).toEqual({ ok: true });
       await vi.waitFor(() => expect(manager.getPublic(started.runId)?.status).toBe('succeeded'), { timeout: 500 });
@@ -133,6 +154,11 @@ describe('ExecutionRunManager — resume rehydrates the immutable launch record'
       expect(manager.getLatestToolResult(started.runId)).toMatchObject({ summary: `turn-${expected}` });
       expect(manager.getStructuredMeta(started.runId)?.payload).toMatchObject({ summary: `turn-${expected}` });
       expect(manager.getPublic(started.runId)?.resumeHandle).toMatchObject({ vendorSessionId: 'child_1' });
+      expect(manager.getPublic(started.runId)).toMatchObject({ notifyParentOnCompletion: effective });
+      expect(manager.listPublic().find((run) => run.runId === started.runId))
+        .toMatchObject({ notifyParentOnCompletion: effective });
+      expect(await readMarker()).toMatchObject({ status: 'succeeded', notifyParentOnCompletion: effective });
+      expect(parentInputs).toHaveLength(effective ? expected : 0);
     }
     expect(loaded).toEqual(['child_1', 'child_1']);
     expect(await manager.send(started.runId, { message: 'Over limit.', resume: true })).toMatchObject({

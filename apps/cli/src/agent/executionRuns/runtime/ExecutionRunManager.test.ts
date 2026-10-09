@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
@@ -9,6 +11,8 @@ import type {
 } from '@/session/runtimeActivity/types';
 
 import { ExecutionRunManager } from './ExecutionRunManager';
+import { configuration } from '@/configuration';
+import { resolveReleaseRingScopedBasename } from '@/cli/runtime/publicReleaseChannel';
 
 async function flushAsyncEffects(): Promise<void> {
   await Promise.resolve();
@@ -518,6 +522,25 @@ describe('ExecutionRunManager (review intent)', () => {
     await manager.waitForTerminal(silent.runId);
     expect(parentInputs).toHaveLength(0);
 
+    const callbackOnly = await manager.start({
+      sessionId: 'parent_callback_only',
+      intent: 'review',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      instructions: 'Review this repo.',
+      permissionMode: 'read_only',
+      retentionPolicy: 'resumable',
+      runClass: 'bounded',
+      ioMode: 'request_response',
+      accountSettings: { executionRunsNotifyParentOnCompletionDefault: true },
+      notifyParentOnCompletion: false,
+    });
+    await manager.waitForTerminal(callbackOnly.runId);
+    expect(manager.get(callbackOnly.runId)?.status).toBe('succeeded');
+    expect(manager.getPublic(callbackOnly.runId)).toMatchObject({ notifyParentOnCompletion: false });
+    expect(manager.listPublic().find((run) => run.runId === callbackOnly.runId))
+      .toMatchObject({ notifyParentOnCompletion: false });
+    expect(parentInputs).toHaveLength(0);
+
     const started = await manager.start({
       sessionId: 'parent_session_1',
       intent: 'review',
@@ -531,6 +554,7 @@ describe('ExecutionRunManager (review intent)', () => {
     });
     await manager.waitForTerminal(started.runId);
 
+    expect(manager.getPublic(started.runId)).toMatchObject({ notifyParentOnCompletion: true });
     expect(parentInputs).toHaveLength(1);
     expect(parentInputs[0]?.text).toContain(started.runId);
     expect((parentInputs[0]?.meta as any)?.happierStructuredInputV1).toMatchObject({
@@ -1629,6 +1653,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
 
   it('keeps long-lived runs running, supports send(), and emits tool-result only when stopped', async () => {
     const sent: Array<{ provider: string; body: unknown; meta?: Record<string, unknown> }> = [];
+    const parentInputs: Array<{ text: string; meta: Record<string, unknown> }> = [];
     const manager = new ExecutionRunManager({
       parentProvider: 'claude',
       cwd: process.cwd(),
@@ -1636,6 +1661,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       sendAcp: (provider: string, body: ACPMessageData, opts?: { meta?: Record<string, unknown> }) => {
         sent.push({ provider, body, meta: opts?.meta });
       },
+      enqueueParentSessionInput: async (input) => { parentInputs.push(input); },
       getNowMs: () => 1_700_000_000_000,
     });
 
@@ -1649,8 +1675,15 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       retentionPolicy: 'ephemeral',
       runClass: 'long_lived',
       ioMode: 'request_response',
+      accountSettings: { executionRunsNotifyParentOnCompletionDefault: true },
+      notifyParentOnCompletion: false,
     });
 
+    const markerPath = join(configuration.happyHomeDir, 'tmp',
+      resolveReleaseRingScopedBasename('daemon-execution-runs', configuration.publicReleaseRing),
+      `run-${started.runId}.json`);
+    const readMarker = async () => JSON.parse(await readFile(markerPath, 'utf8'));
+    expect(await readMarker()).toMatchObject({ notifyParentOnCompletion: false });
     expect(manager.get(started.runId)?.status).toBe('running');
     expect((manager.getPublic(started.runId) as any)?.display?.groupId).toBe('group_1');
     expect(sent.filter((m) => (m.body as any)?.type === 'tool-result').length).toBe(0);
@@ -1662,11 +1695,15 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       .poll(() => sent.filter((m) => (m.body as any)?.type === 'message').length, { timeout: 1_000 })
       .toBe(2);
     expect(sent.filter((m) => (m.body as any)?.type === 'tool-result').length).toBe(0);
+    expect(manager.get(started.runId)?.status).toBe('running');
+    expect(parentInputs).toHaveLength(0);
 
     const stopped = await manager.stop(started.runId);
     expect(stopped.ok).toBe(true);
     await manager.waitForTerminal(started.runId);
     expect(manager.get(started.runId)?.status).toBe('cancelled');
+    expect(await readMarker()).toMatchObject({ status: 'cancelled', notifyParentOnCompletion: false });
+    expect(parentInputs).toHaveLength(0);
     // Under heavy parallel load, the last sendAcp callback can arrive on a later microtask.
     await expect
       .poll(() => sent.filter((m) => (m.body as any)?.type === 'tool-result').length, { timeout: 1_000 })

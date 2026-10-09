@@ -485,6 +485,21 @@ publishes a new structured result and terminal state while retaining the vendor
 session. Completion/disposal rejects overlapping resume requests as busy, and
 turn limits remain cumulative even after explicit rehydration. Long-lived turns
 remain nonterminal and deliver output to the sidechain.
+Run-start actions accept `notifyParentOnCompletion` as an optional boolean:
+omission preserves the account default, while an explicit value overrides it
+for that run. Delegation that already sends an explicit result callback uses
+`false` to avoid a second parent input announcing terminal completion. A
+long-lived worker sends a result for each assigned task without treating its
+turn completion as the end of the worker session. Public get/list state exposes
+the effective notification boolean so callers can check an existing worker
+before reuse. The resolved policy stays fixed across supported same-run resume,
+even if the account default changes. Start, activity and terminal markers
+preserve both boolean values so marker-backed get/list recovery retains known
+policy. Older hosts, legacy sparse markers and transcript-only history may
+omit it; omission means unknown, not false. Markers remain best-effort telemetry,
+not a live controller or a guarantee of callback delivery. This development
+source contract requires an updated host; the installed primitive PoC does not
+activate the high-level route or its discovery/public-state changes.
 Execution-run prompt delivery reuses the normal Happier tools appendix for
 catalog-declared shell-bridge Agents. Bounded initial, interrupt, and resumed
 turns and long-lived initial, follow-up, and resumed turns receive discovery

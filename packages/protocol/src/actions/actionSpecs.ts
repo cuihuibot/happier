@@ -179,6 +179,14 @@ export const ActionInputFieldHintSchema = z
   });
 export type ActionInputFieldHint = z.infer<typeof ActionInputFieldHintSchema>;
 
+const EXECUTION_RUN_NOTIFICATION_FIELD = {
+  path: 'notifyParentOnCompletion',
+  title: 'Notify parent on run completion',
+  description: 'Optional boolean. Omit to use the account default; false suppresses the automatic terminal notification for this run, not its result or explicit callback.',
+  widget: 'toggle',
+  required: false,
+} satisfies ActionInputFieldHint;
+
 export const ActionInputHintsSchema = z
   .object({
     title: z.string().min(1).optional(),
@@ -432,6 +440,7 @@ const IntentStartCommonSchema = z.object({
   retentionPolicy: z.enum(['ephemeral', 'resumable']).optional(),
   runClass: z.enum(['bounded', 'long_lived']).optional(),
   ioMode: z.enum(['request_response', 'streaming']).optional(),
+  notifyParentOnCompletion: z.boolean().optional(),
   // Optional model selection for every fanned-out run, using the SAME canonical shape as
   // session spawn (`session.spawn_new`'s `modelId`). Omit to use each backend's default model.
   modelId: z.string().min(1).optional(),
@@ -502,6 +511,7 @@ const ExecutionRunStartInputSchema = z.object({
   retentionPolicy: z.enum(['ephemeral', 'resumable']),
   runClass: z.enum(['bounded', 'long_lived']),
   ioMode: z.enum(['request_response', 'streaming']),
+  notifyParentOnCompletion: z.boolean().optional(),
   initialContextMode: z.enum(['bootstrap', 'first_turn']).optional(),
   // Optional model selection for the run's backend — SAME canonical shape as session spawn's
   // `modelId`. Omit to use the backend's default model.
@@ -1296,6 +1306,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       title: 'Start a planning run',
       description: 'Start Happier-managed planning runs using explicit agent provider/backend targets.',
       fields: [
+        EXECUTION_RUN_NOTIFICATION_FIELD,
         {
           path: 'backendTargetKeys',
           title: 'Provider/backend targets',
@@ -1367,6 +1378,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       title: 'Start a delegation run',
       description: 'Start Happier-managed delegation runs using explicit agent provider/backend targets.',
       fields: [
+        EXECUTION_RUN_NOTIFICATION_FIELD,
         { path: 'profileId', title: 'Saved native worker profile', widget: 'text', optionsSourceId: 'sessions.spawn.profiles.available',
           description: 'Optional ID or unique name. Supplies one backend and defaults; explicit call options and parent permission policy take precedence.' },
         {
@@ -1446,6 +1458,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       title: 'Start a voice agent run',
       description: 'Start a voice agent execution run (typically used by the voice control plane).',
       fields: [
+        EXECUTION_RUN_NOTIFICATION_FIELD,
         {
           path: 'backendTargetKeys',
           title: 'Provider/backend targets',
@@ -1516,6 +1529,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     inputHints: {
       title: 'Start a run',
       fields: [
+        EXECUTION_RUN_NOTIFICATION_FIELD,
         { path: 'profileId', title: 'Saved native worker profile', widget: 'text', optionsSourceId: 'sessions.spawn.profiles.available' },
         { path: 'sessionId', title: 'Session id', widget: 'text' },
         { path: 'intent', title: 'Intent', widget: 'text', required: true },

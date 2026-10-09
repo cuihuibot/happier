@@ -129,6 +129,7 @@ export const ExecutionRunPublicStateSchema = z.object({
   retentionPolicy: ExecutionRunRetentionPolicySchema,
   runClass: ExecutionRunClassSchema,
   ioMode: ExecutionRunIoModeSchema,
+  notifyParentOnCompletion: z.boolean().optional(),
   status: ExecutionRunStatusSchema,
   turnInFlight: z.boolean().optional(),
   availableActionIds: z.array(z.string().min(1)).optional(),

@@ -42,6 +42,7 @@ const DaemonExecutionRunMarkerSchemaCore = z.object({
   runClass: ExecutionRunClassSchema,
   ioMode: ExecutionRunIoModeSchema,
   retentionPolicy: ExecutionRunRetentionPolicySchema,
+  notifyParentOnCompletion: z.boolean().optional(),
 
   status: ExecutionRunStatusSchema,
   startedAtMs: z.number().int().nonnegative(),

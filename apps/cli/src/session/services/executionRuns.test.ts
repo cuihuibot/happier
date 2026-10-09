@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { logger } from '@/ui/logger';
+
 const { callSessionRpc, listExecutionRunMarkers, readRawSessionHistoryRows } = vi.hoisted(() => ({
     callSessionRpc: vi.fn(),
     listExecutionRunMarkers: vi.fn(),
@@ -28,7 +30,7 @@ import {
 
 function createRun(params: Readonly<{
     runId: string;
-    status: 'running' | 'succeeded';
+    status: 'running' | 'succeeded' | 'failed';
     startedAtMs: number;
 }>) {
     return {
@@ -43,7 +45,7 @@ function createRun(params: Readonly<{
         ioMode: 'request_response' as const,
         status: params.status,
         startedAtMs: params.startedAtMs,
-        ...(params.status === 'succeeded' ? { finishedAtMs: params.startedAtMs + 1 } : {}),
+        ...(params.status !== 'running' ? { finishedAtMs: params.startedAtMs + 1 } : {}),
     };
 }
 
@@ -75,7 +77,7 @@ function createMarker(params: Readonly<{
 function createTranscriptRows(params: Readonly<{
     runId: string;
     callId?: string;
-    status: 'running' | 'succeeded';
+    status: 'running' | 'succeeded' | 'failed';
     startedAtMs: number;
 }>) {
     const callId = params.callId ?? `${params.runId}-call`;
@@ -135,7 +137,7 @@ function createTranscriptRows(params: Readonly<{
                             ioMode: 'request_response',
                             status: params.status,
                             startedAtMs: params.startedAtMs,
-                            ...(params.status === 'succeeded' ? { finishedAtMs: params.startedAtMs + 10 } : {}),
+                            ...(params.status !== 'running' ? { finishedAtMs: params.startedAtMs + 10 } : {}),
                         },
                     },
                 },
@@ -149,6 +151,69 @@ describe('listExecutionRuns', () => {
         callSessionRpc.mockReset();
         listExecutionRunMarkers.mockReset();
         readRawSessionHistoryRows.mockReset();
+    });
+
+    it.each([false, true, undefined])('retains marker notification policy without inventing a value (%s)', async (policy) => {
+        const marker = {
+            ...createMarker({ runId: 'run-retained', status: 'succeeded', startedAtMs: 10 }),
+            ...(policy !== undefined ? { notifyParentOnCompletion: policy } : {}),
+        };
+        const context = {
+            token: 'token',
+            sessionId: 'sess-1',
+            ctx: { encryptionKey: new Uint8Array([1, 2, 3, 4]), encryptionVariant: 'legacy' as const },
+        };
+        callSessionRpc.mockRejectedValueOnce(new Error('RPC method not available'));
+        listExecutionRunMarkers.mockResolvedValueOnce([marker]);
+        const listed = await listExecutionRuns({ ...context, request: {} });
+        const expected = {
+            ...createRun({ runId: 'run-retained', status: 'succeeded', startedAtMs: 10 }),
+            ...(policy !== undefined ? { notifyParentOnCompletion: policy } : {}),
+        };
+        expect(listed).toEqual({ ok: true, data: { runs: [expected] } });
+
+        callSessionRpc.mockRejectedValueOnce(new Error('RPC method not available'));
+        listExecutionRunMarkers.mockResolvedValueOnce([marker]);
+        const got = await getExecutionRun({ ...context, request: { runId: 'run-retained' } });
+        expect(got).toMatchObject({ ok: true, data: { run: expected } });
+    });
+
+    it.each([false, true])('retains known policy when transcript state supersedes a stale marker (%s)', async (policy) => {
+        const marker = {
+            ...createMarker({ runId: 'run-retained', status: 'running', startedAtMs: 10 }),
+            notifyParentOnCompletion: policy,
+        };
+        const rows = createTranscriptRows({ runId: 'run-retained', status: 'succeeded', startedAtMs: 10 });
+        const context = {
+            token: 'token',
+            sessionId: 'sess-1',
+            ctx: { encryptionKey: new Uint8Array([1, 2, 3, 4]), encryptionVariant: 'legacy' as const },
+        };
+        callSessionRpc.mockRejectedValueOnce(new Error('RPC method not available'));
+        listExecutionRunMarkers.mockResolvedValueOnce([marker]);
+        readRawSessionHistoryRows.mockResolvedValueOnce(rows);
+        expect(await listExecutionRuns({ ...context, request: {} })).toMatchObject({
+            ok: true,
+            data: { runs: [{ runId: 'run-retained', status: 'succeeded', notifyParentOnCompletion: policy }] },
+        });
+
+        callSessionRpc.mockRejectedValueOnce(new Error('RPC method not available'));
+        listExecutionRunMarkers.mockResolvedValueOnce([marker]);
+        readRawSessionHistoryRows.mockResolvedValueOnce(rows);
+        expect(await getExecutionRun({ ...context, request: { runId: 'run-retained' } })).toMatchObject({
+            ok: true,
+            data: { run: { runId: 'run-retained', status: 'succeeded', notifyParentOnCompletion: policy } },
+        });
+
+        callSessionRpc.mockResolvedValueOnce({
+            runs: [{ ...createRun({ runId: 'run-retained', status: 'succeeded', startedAtMs: 10 }),
+                notifyParentOnCompletion: !policy }],
+        });
+        listExecutionRunMarkers.mockResolvedValueOnce([marker]);
+        expect(await listExecutionRuns({ ...context, request: {} })).toMatchObject({
+            ok: true,
+            data: { runs: [{ runId: 'run-retained', notifyParentOnCompletion: !policy }] },
+        });
     });
 
     it('returns an invalid response error when a successful rpc list payload does not match the contract', async () => {
@@ -687,6 +752,138 @@ describe('getExecutionRun', () => {
         callSessionRpc.mockReset();
         listExecutionRunMarkers.mockReset();
         readRawSessionHistoryRows.mockReset();
+        vi.spyOn(logger, 'warnFile').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const context = {
+        token: 'token',
+        sessionId: 'sess-1',
+        ctx: { encryptionKey: new Uint8Array([1, 2, 3, 4]), encryptionVariant: 'legacy' as const },
+    };
+
+    function arrangeRpcFallback(path: 'transport' | 'app') {
+        if (path === 'transport') {
+            callSessionRpc.mockRejectedValueOnce(new Error('RPC method not available'));
+        } else {
+            callSessionRpc.mockResolvedValueOnce({
+                ok: false,
+                errorCode: 'execution_run_not_found',
+                error: 'Not found',
+            });
+        }
+    }
+
+    it.each(['transport', 'app'] as const)(
+        'retains recovered transcript state and diagnoses unavailable optional markers on %s fallback',
+        async (path) => {
+            arrangeRpcFallback(path);
+            const markerError = Object.assign(new Error('Marker directory unavailable'), { code: 'EACCES' });
+            listExecutionRunMarkers.mockRejectedValueOnce(markerError);
+            readRawSessionHistoryRows.mockResolvedValueOnce(createTranscriptRows({
+                runId: 'run-recovered',
+                status: 'failed',
+                startedAtMs: 10,
+            }));
+
+            expect(await getExecutionRun({ ...context, request: { runId: 'run-recovered' } })).toEqual({
+                ok: true,
+                data: {
+                    run: {
+                        ...createRun({ runId: 'run-recovered', status: 'failed', startedAtMs: 10 }),
+                        sidechainId: 'run-recovered-call',
+                        finishedAtMs: 20,
+                    },
+                },
+            });
+            expect(logger.warnFile).toHaveBeenCalledWith(expect.any(String), {
+                sessionId: 'sess-1',
+                runId: 'run-recovered',
+                error: markerError,
+            });
+        },
+    );
+
+    it.each(['transport', 'app'] as const)(
+        'propagates marker storage failure when no transcript run is usable on %s fallback',
+        async (path) => {
+            arrangeRpcFallback(path);
+            readRawSessionHistoryRows.mockRejectedValueOnce(new Error('Transcript unavailable'));
+            const markerError = Object.assign(new Error('Marker directory unavailable'), { code: 'EACCES' });
+            listExecutionRunMarkers.mockRejectedValueOnce(markerError);
+
+            await expect(getExecutionRun({ ...context, request: { runId: 'run-missing' } }))
+                .rejects.toBe(markerError);
+            expect(logger.warnFile).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each([false, true])('retains readable marker policy during app-level transcript recovery (%s)', async (policy) => {
+        arrangeRpcFallback('app');
+        readRawSessionHistoryRows.mockResolvedValueOnce(createTranscriptRows({
+            runId: 'run-recovered',
+            status: 'succeeded',
+            startedAtMs: 10,
+        }));
+        listExecutionRunMarkers.mockResolvedValueOnce([{
+            ...createMarker({ runId: 'run-recovered', status: 'running', startedAtMs: 10 }),
+            notifyParentOnCompletion: policy,
+        }]);
+
+        expect(await getExecutionRun({ ...context, request: { runId: 'run-recovered' } })).toMatchObject({
+            ok: true,
+            data: { run: { runId: 'run-recovered', status: 'succeeded', notifyParentOnCompletion: policy } },
+        });
+        expect(logger.warnFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { runId: 'another-run', happySessionId: 'sess-1' },
+        { runId: 'run-recovered', happySessionId: 'another-session' },
+    ])('does not enrich transcript policy from an unrelated marker (%j)', async (identity) => {
+        arrangeRpcFallback('app');
+        readRawSessionHistoryRows.mockResolvedValueOnce(createTranscriptRows({
+            runId: 'run-recovered',
+            status: 'succeeded',
+            startedAtMs: 10,
+        }));
+        listExecutionRunMarkers.mockResolvedValueOnce([{
+            ...createMarker({ runId: 'run-recovered', status: 'running', startedAtMs: 10 }),
+            ...identity,
+            notifyParentOnCompletion: false,
+        }]);
+
+        expect(await getExecutionRun({ ...context, request: { runId: 'run-recovered' } })).toEqual({
+            ok: true,
+            data: {
+                run: {
+                    ...createRun({ runId: 'run-recovered', status: 'succeeded', startedAtMs: 10 }),
+                    sidechainId: 'run-recovered-call',
+                    finishedAtMs: 20,
+                },
+            },
+        });
+    });
+
+    it.each([false, true])('does not consult markers or override known successful RPC policy (%s)', async (policy) => {
+        const run = {
+            ...createRun({ runId: 'run-primary', status: 'failed', startedAtMs: 10 }),
+            notifyParentOnCompletion: policy,
+            error: { code: 'retained_error' },
+        };
+        callSessionRpc.mockResolvedValueOnce({ run });
+        listExecutionRunMarkers.mockResolvedValueOnce([{
+            ...createMarker({ runId: 'run-primary', status: 'running', startedAtMs: 10 }),
+            notifyParentOnCompletion: !policy,
+        }]);
+
+        expect(await getExecutionRun({ ...context, request: { runId: 'run-primary' } }))
+            .toEqual({ ok: true, data: { run } });
+        expect(listExecutionRunMarkers).not.toHaveBeenCalled();
+        expect(logger.warnFile).not.toHaveBeenCalled();
     });
 
     it('returns an invalid response error when a successful rpc get payload does not match the contract', async () => {

@@ -35,6 +35,7 @@ export const executionRunStartToolInputSchema = z.object({
   retentionPolicy: z.enum(['ephemeral', 'resumable']).optional(),
   runClass: z.enum(['bounded', 'long_lived']).optional(),
   ioMode: z.enum(['request_response', 'streaming']).optional(),
+  notifyParentOnCompletion: z.boolean().optional(),
   connectedServices: z.unknown().optional(),
 }).passthrough().superRefine((value, ctx) => {
   const hasBackendTarget = typeof value.backendTarget !== 'undefined';
@@ -100,6 +101,9 @@ export function normalizeExecutionRunStartToolInput(params: Readonly<{
     retentionPolicy: parsed.data.retentionPolicy ?? 'ephemeral',
     runClass: parsed.data.runClass ?? defaultRunClassForExecutionRunIntent(parsed.data.intent),
     ioMode: parsed.data.ioMode ?? defaultIoModeForExecutionRunIntent(parsed.data.intent),
+    ...(typeof parsed.data.notifyParentOnCompletion === 'boolean'
+      ? { notifyParentOnCompletion: parsed.data.notifyParentOnCompletion }
+      : {}),
     ...(typeof parsed.data.initialContextMode !== 'undefined' ? { initialContextMode: parsed.data.initialContextMode } : {}),
     ...(typeof parsed.data.resumeHandle !== 'undefined' ? { resumeHandle: parsed.data.resumeHandle } : {}),
     ...(typeof parsed.data.replay !== 'undefined' ? { replay: parsed.data.replay } : {}),

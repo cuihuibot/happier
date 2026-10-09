@@ -102,6 +102,27 @@ live naming evidence is limited to Copilot on macOS; shared tests do not prove
 other providers live. Source coverage and manual visual acceptance are separate
 from release or deployment approval.
 
+### Callback-owned worker results (development)
+
+Managed delegation and legacy execution-run starts preserve the optional
+`notifyParentOnCompletion` boolean. Explicit `false` suppresses the separate
+automatic terminal parent input; explicit `true` retains it, and omission
+continues to use the existing account default. The policy is fixed at start:
+sending another task or resuming a run is not a policy update.
+
+Public get/list state and lifecycle markers retain known true and false values.
+Recovery does not turn an unknown value into false. A readable transcript remains
+usable if optional marker enrichment fails, with a file-only warning; marker
+failure without a usable transcript still follows the existing error path.
+See [CLI architecture](cli-architecture.md) for the canonical owner and contract.
+
+An explicit result callback is separate from terminal notification. A caller
+using callback-owned completion must verify the effective policy and provide its
+own useful result; suppression does not guarantee delivery or a failure alert.
+Protocol action/boolean schemas, CLI fanout/legacy normalization, manager
+lifecycle/rehydration and public service recovery have focused regression
+coverage. This source contract is not an installed rollout claim.
+
 ### Copilot completion persistence
 
 - A Copilot turn that finishes only through `task_complete` still creates a

@@ -20,6 +20,7 @@ import type {
     SessionStoredContentEncryptionMode,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
+import { logger } from '@/ui/logger';
 import { delay } from '@/utils/time';
 import { applyExecutionRunListRequest } from './applyExecutionRunListRequest';
 import {
@@ -184,6 +185,9 @@ function toExecutionRunPublicState(marker: ExecutionRunMarkerRecord): ExecutionR
         retentionPolicy: marker.retentionPolicy,
         runClass: marker.runClass,
         ioMode: marker.ioMode,
+        ...(typeof marker.notifyParentOnCompletion === 'boolean'
+            ? { notifyParentOnCompletion: marker.notifyParentOnCompletion }
+            : {}),
         status: marker.status,
         ...(marker.resumeHandle && marker.resumeHandle !== null ? { resumeHandle: marker.resumeHandle } : {}),
         startedAtMs: marker.startedAtMs,
@@ -228,11 +232,20 @@ function mergeExecutionRunLists(params: Readonly<{
         byRunId.set(run.runId, run);
     }
     for (const run of params.markerRuns) {
-        if (!byRunId.has(run.runId)) {
-            byRunId.set(run.runId, run);
-        }
+        const primary = byRunId.get(run.runId);
+        byRunId.set(run.runId, primary ? retainKnownNotificationPolicy(primary, run) : run);
     }
     return Array.from(byRunId.values()).sort((left, right) => left.startedAtMs - right.startedAtMs);
+}
+
+function retainKnownNotificationPolicy(
+    primary: ExecutionRunPublicState,
+    marker: ExecutionRunPublicState | null,
+): ExecutionRunPublicState {
+    return typeof primary.notifyParentOnCompletion !== 'boolean'
+        && typeof marker?.notifyParentOnCompletion === 'boolean'
+        ? { ...primary, notifyParentOnCompletion: marker.notifyParentOnCompletion }
+        : primary;
 }
 
 function toExecutionRunFallbackExhaustedError(
@@ -318,7 +331,18 @@ async function buildExecutionRunGetFallbackRun(
 ): Promise<ExecutionRunPublicState | null> {
     const transcriptRun = await tryGetTranscriptBackedExecutionRun(params);
     if (transcriptRun) {
-        return transcriptRun;
+        let markerRun: ExecutionRunPublicState | null;
+        try {
+            markerRun = await getMarkerBackedExecutionRun(params);
+        } catch (error) {
+            logger.warnFile('[executionRuns] Optional marker enrichment unavailable; retaining transcript run', {
+                sessionId: params.sessionId,
+                runId: params.runId,
+                error,
+            });
+            return transcriptRun;
+        }
+        return retainKnownNotificationPolicy(transcriptRun, markerRun);
     }
 
     return await getMarkerBackedExecutionRun({

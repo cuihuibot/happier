@@ -397,6 +397,9 @@ export class ExecutionRunManager {
       retentionPolicy: run.retentionPolicy,
       runClass: run.runClass,
       ioMode: run.ioMode,
+      ...(typeof run.notifyParentOnCompletion === 'boolean'
+        ? { notifyParentOnCompletion: run.notifyParentOnCompletion }
+        : {}),
       status: run.status,
       ...(ctrl?.kind === 'backend' ? { turnInFlight: ctrl.turnInFlight } : {}),
       ...(availableActionIds.length > 0 ? { availableActionIds } : {}),
@@ -428,6 +431,9 @@ export class ExecutionRunManager {
         retentionPolicy: run.retentionPolicy,
         runClass: run.runClass,
         ioMode: run.ioMode,
+        ...(typeof run.notifyParentOnCompletion === 'boolean'
+          ? { notifyParentOnCompletion: run.notifyParentOnCompletion }
+          : {}),
         status: run.status,
         ...(ctrl?.kind === 'backend' ? { turnInFlight: ctrl.turnInFlight } : {}),
         ...(availableActionIds.length > 0 ? { availableActionIds } : {}),
