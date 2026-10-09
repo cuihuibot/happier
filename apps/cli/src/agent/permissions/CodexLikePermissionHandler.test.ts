@@ -617,7 +617,7 @@ describe('CodexLikePermissionHandler', () => {
     );
   });
 
-  it.each([false, true])('auto-approves locally generated discovery in read-only mode (session-agent=%s)', async (sessionAgentBridge) => {
+  it.each([[false, false], [false, true], [true, false], [true, true]] as const)('auto-approves literal discovery in read-only mode (session-agent=%s, reformatted=%s)', async (sessionAgentBridge, reformatted) => {
     const session = new FakeSession();
     const handler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });
     handler.setPermissionMode('read-only');
@@ -625,16 +625,19 @@ describe('CodexLikePermissionHandler', () => {
       '@/agent/tools/happierTools/runtime/buildHappierToolsShellBridgeCommand'
     );
 
+    const command = buildHappierToolsShellBridgeCommand([
+      'list',
+      ...(sessionAgentBridge ? ['--session-agent-bridge'] : []),
+      '--session-id',
+      'cmmfivqgm002d8o1ug15b02o1',
+      '--directory',
+      '/tmp/workspace',
+      '--json',
+    ]);
     const result = await handler.handleToolCall('tool-1', 'bash', {
-      command: buildHappierToolsShellBridgeCommand([
-        'list',
-        ...(sessionAgentBridge ? ['--session-agent-bridge'] : []),
-        '--session-id',
-        'cmmfivqgm002d8o1ug15b02o1',
-        '--directory',
-        '/tmp/workspace',
-        '--json',
-      ]),
+      command: reformatted
+        ? command.replace(/'(tools|list|--[a-z-]+|cmmfivqgm002d8o1ug15b02o1|\/tmp\/workspace)'/g, '$1')
+        : command,
     });
 
     expect(result.decision).toBe('approved');

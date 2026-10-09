@@ -28,6 +28,26 @@ afterEach(() => {
 });
 
 describe('buildHappierToolsShellBridgeCommand', () => {
+  it('recognizes provider-reformatted literal flags without admitting shell expansion or extra words', async () => {
+    const { buildHappierToolsShellBridgeCommand, parseTrustedHappierToolsShellBridgeCommand } =
+      await import('./buildHappierToolsShellBridgeCommand');
+    const command = buildHappierToolsShellBridgeCommand([
+      'call', '--session-agent-bridge', '--session-id', 'host-parent',
+      '--directory', '/workspace/worker', '--source', 'happier', '--tool', 'action_execute',
+      '--args-json', '{"actionId":"execution.run.get","input":{"runId":"run-1"}}', '--json',
+    ]);
+    const reformatted = command.replace(/'(tools|call|--[a-z-]+|host-parent|\/workspace\/worker|happier|action_execute)'/g, '$1');
+    expect(parseTrustedHappierToolsShellBridgeCommand(reformatted)).toMatchObject({
+      kind: 'call', sessionAgentBridge: true, sessionId: 'host-parent', directory: '/workspace/worker',
+    });
+    expect(parseTrustedHappierToolsShellBridgeCommand(`${reformatted} ''`)).toBeNull();
+    expect(parseTrustedHappierToolsShellBridgeCommand(`${reformatted} | cat`)).toBeNull();
+    expect(parseTrustedHappierToolsShellBridgeCommand(`${reformatted} --session-id other-parent`)).toBeNull();
+    for (const value of ['$HOME', '${HOME}', '~/worker', '/workspace/*', '/workspace/{a,b}', '$(pwd)']) {
+      expect(parseTrustedHappierToolsShellBridgeCommand(reformatted.replace('/workspace/worker', value))).toBeNull();
+    }
+  });
+
   it.each(['list', 'call'] as const)('trusts the actual standalone launcher for session-agent %s and rejects substitutions', async (kind) => {
     const descriptor = Object.getOwnPropertyDescriptor(process, 'execPath')!;
     const execPath = '/opt/happier/cli/happier';
@@ -149,6 +169,9 @@ describe('buildHappierToolsShellBridgeCommand', () => {
       parseTrustedHappierToolsShellBridgeCommand(
         command.replace(`HAPPIER_HOME_DIR='${happierHome}'`, `HAPPIER_HOME_DIR='/tmp/attacker'`),
       ),
+    ).toBeNull();
+    expect(
+      parseTrustedHappierToolsShellBridgeCommand(command.replace(`HAPPIER_HOME_DIR='${happierHome}'`, `'HAPPIER_HOME_DIR=${happierHome}'`)),
     ).toBeNull();
   });
 

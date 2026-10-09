@@ -1,6 +1,27 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseHappierToolsShellBridgeCommand } from './happierToolsShellBridge.js';
+import { haveEqualLiteralShellWords, parseHappierToolsShellBridgeCommand } from './happierToolsShellBridge.js';
+
+describe('literal shell command equivalence', () => {
+  it.each([
+    ['"/opt/happier" tools list', "'/opt/happier' 'tools' 'list'"],
+    ["'/opt/happier' tools call --args-json '{\"value\":\"$HOME * ~ #\"}'", "'/opt/happier' 'tools' 'call' '--args-json' '{\"value\":\"$HOME * ~ #\"}'"],
+    ['ENV="literal value" /opt/happier tools list', "ENV='literal value' '/opt/happier' 'tools' 'list'"],
+  ])('accepts equivalent literal shell words: %s', (actual, expected) => {
+    expect(haveEqualLiteralShellWords(actual, expected)).toBe(true);
+  });
+
+  it.each([
+    ['$HOME', "'$HOME'"], ['"${HOME}"', "'${HOME}'"], ['~', "'~'"],
+    ['*', "'*'"], ['[ab]', "'[ab]'"], ['{a,b}', "'{a,b}'"], ['#comment', "'#comment'"],
+    ['(word)', "'(word)'"], ['"\\a"', "'a'"], ["word ''", "'word'"],
+    ['word; other', "'word;' 'other'"], ['$(pwd)', "'$(pwd)'"], ['`pwd`', "'`pwd`'"],
+    ['/tmp/happier tools list', "'/opt/happier' 'tools' 'list'"],
+    ["ENV='other' /opt/happier tools list", "ENV='literal' '/opt/happier' 'tools' 'list'"],
+  ])('rejects nonliteral or changed words: %s', (actual, expected) => {
+    expect(haveEqualLiteralShellWords(actual, expected)).toBe(false);
+  });
+});
 
 describe('parseHappierToolsShellBridgeCommand', () => {
   it('recognizes a standalone package-dist entrypoint without assuming an installation directory name', () => {
