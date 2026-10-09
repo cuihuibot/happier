@@ -26,7 +26,7 @@ export type ToolsCommandDeps = Readonly<{
   readCredentials: () => Promise<Credentials | null>;
   initializeBackendApiContext: typeof initializeBackendApiContext;
   bootstrapAccountSettingsContext: typeof bootstrapAccountSettingsContext;
-  listBuiltInHappierTools: () => Promise<ReadonlyArray<BuiltInToolEntry>> | ReadonlyArray<BuiltInToolEntry>;
+  listBuiltInHappierTools: (params?: Parameters<typeof listBuiltInHappierTools>[0]) => Promise<ReadonlyArray<BuiltInToolEntry>> | ReadonlyArray<BuiltInToolEntry>;
   callBuiltInHappierTool: typeof callBuiltInHappierTool;
   resolveCustomHappierToolsContext: typeof resolveCustomHappierToolsContext;
   listResolvedCustomHappierTools: typeof listResolvedCustomHappierTools;
@@ -38,7 +38,7 @@ function resolveToolsCommandDeps(overrides?: Partial<ToolsCommandDeps>): ToolsCo
     readCredentials,
     initializeBackendApiContext,
     bootstrapAccountSettingsContext,
-    listBuiltInHappierTools: async () => listBuiltInHappierTools({ surface: 'cli' }),
+    listBuiltInHappierTools,
     callBuiltInHappierTool,
     resolveCustomHappierToolsContext,
     listResolvedCustomHappierTools,
@@ -190,7 +190,9 @@ export async function handleToolsCommand(args: string[], overrides?: Partial<Too
   try {
     if (subcommand === 'list') {
       const context = await resolveCustomToolsRuntimeContext(args, deps);
-      const builtInTools = await deps.listBuiltInHappierTools();
+      const builtInTools = await deps.listBuiltInHappierTools({
+        surface: args.includes('--session-agent-bridge') ? 'session_agent' : 'cli',
+      });
       const { tools: customTools, warnings } = await deps.listResolvedCustomHappierTools({ mcpServers: context.mcpServers });
 
       if (json) {

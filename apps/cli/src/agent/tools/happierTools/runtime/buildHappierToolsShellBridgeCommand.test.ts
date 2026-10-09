@@ -12,6 +12,8 @@ const ENV_KEYS = [
   'HAPPIER_PUBLIC_SERVER_URL',
   'HAPPIER_WEBAPP_URL',
   'HAPPIER_ACCESS_TOKEN',
+  'HAPPIER_CLI_SUBPROCESS_RUNTIME',
+  'HAPPIER_CLI_SUBPROCESS_ENTRYPOINT',
 ] as const;
 
 let envScope = createEnvKeyScope(ENV_KEYS);
@@ -26,6 +28,65 @@ afterEach(() => {
 });
 
 describe('buildHappierToolsShellBridgeCommand', () => {
+  it('recognizes provider-reformatted literal flags without admitting shell expansion or extra words', async () => {
+    const { buildHappierToolsShellBridgeCommand, parseTrustedHappierToolsShellBridgeCommand } =
+      await import('./buildHappierToolsShellBridgeCommand');
+    const command = buildHappierToolsShellBridgeCommand([
+      'call', '--session-agent-bridge', '--session-id', 'host-parent',
+      '--directory', '/workspace/worker', '--source', 'happier', '--tool', 'action_execute',
+      '--args-json', '{"actionId":"execution.run.get","input":{"runId":"run-1"}}', '--json',
+    ]);
+    const reformatted = command.replace(/'(tools|call|--[a-z-]+|host-parent|\/workspace\/worker|happier|action_execute)'/g, '$1');
+    expect(parseTrustedHappierToolsShellBridgeCommand(reformatted)).toMatchObject({
+      kind: 'call', sessionAgentBridge: true, sessionId: 'host-parent', directory: '/workspace/worker',
+    });
+    expect(parseTrustedHappierToolsShellBridgeCommand(`${reformatted} ''`)).toBeNull();
+    expect(parseTrustedHappierToolsShellBridgeCommand(`${reformatted} | cat`)).toBeNull();
+    expect(parseTrustedHappierToolsShellBridgeCommand(`${reformatted} --session-id other-parent`)).toBeNull();
+    for (const value of ['$HOME', '${HOME}', '~/worker', '/workspace/*', '/workspace/{a,b}', '$(pwd)']) {
+      expect(parseTrustedHappierToolsShellBridgeCommand(reformatted.replace('/workspace/worker', value))).toBeNull();
+    }
+  });
+
+  it.each(['list', 'call'] as const)('trusts the actual standalone launcher for session-agent %s and rejects substitutions', async (kind) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+    const execPath = '/opt/happier/cli/happier';
+    const { buildHappierToolsShellBridgeCommand, parseTrustedHappierToolsShellBridgeCommand } =
+      await import('./buildHappierToolsShellBridgeCommand');
+    envScope.patch({
+      HAPPIER_CLI_SUBPROCESS_RUNTIME: 'bun',
+      HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: import.meta.filename,
+    });
+    Object.defineProperty(process, 'execPath', { ...descriptor, value: execPath });
+    try {
+      const command = buildHappierToolsShellBridgeCommand([
+        kind, '--session-agent-bridge', '--session-id', 'host-parent',
+        '--directory', '/workspace/worker directory',
+        ...(kind === 'call' ? ['--source', 'happier', '--tool', 'action_execute', '--args-json', '{"actionId":"session.message.send","input":{"sessionId":"host-parent","message":"Done","wait":false}}'] : []),
+        '--json',
+      ]);
+      expect(command).toContain(`'${execPath}'`);
+      expect(parseTrustedHappierToolsShellBridgeCommand(command)).toMatchObject({
+        kind, sessionAgentBridge: true, sessionId: 'host-parent', directory: '/workspace/worker directory',
+      });
+      if (kind === 'call') {
+        const { extractHappierToolsShellBridgeToolNameHint } =
+          await import('@/agent/transport/utils/happierToolsShellBridgeToolNameHint');
+        expect(extractHappierToolsShellBridgeToolNameHint({ command })).toBe('action_execute');
+        expect(extractHappierToolsShellBridgeToolNameHint({ command: command.replace(execPath, '/tmp/happier') })).toBeNull();
+      }
+      expect(parseTrustedHappierToolsShellBridgeCommand(command.replace(execPath, '/tmp/happier'))).toBeNull();
+      expect(parseTrustedHappierToolsShellBridgeCommand(command.replace("'--session-agent-bridge' ", ''))).toMatchObject({
+        kind, sessionId: 'host-parent',
+      });
+      expect(parseTrustedHappierToolsShellBridgeCommand(`${command} '--session-id' 'other-parent'`)).toBeNull();
+      expect(parseTrustedHappierToolsShellBridgeCommand(`${command} '--directory' '/tmp/other'`)).toBeNull();
+      expect(parseTrustedHappierToolsShellBridgeCommand(`${command} && echo extra`)).toBeNull();
+    } finally {
+      Object.defineProperty(process, 'execPath', descriptor);
+    }
+  });
+
   it.each(['list', 'call'] as const)('recognizes canonical session-agent %s commands without dropping their surface', async (kind) => {
     const {
       buildHappierToolsShellBridgeCommand,
@@ -108,6 +169,9 @@ describe('buildHappierToolsShellBridgeCommand', () => {
       parseTrustedHappierToolsShellBridgeCommand(
         command.replace(`HAPPIER_HOME_DIR='${happierHome}'`, `HAPPIER_HOME_DIR='/tmp/attacker'`),
       ),
+    ).toBeNull();
+    expect(
+      parseTrustedHappierToolsShellBridgeCommand(command.replace(`HAPPIER_HOME_DIR='${happierHome}'`, `'HAPPIER_HOME_DIR=${happierHome}'`)),
     ).toBeNull();
   });
 

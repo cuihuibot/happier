@@ -30,30 +30,39 @@ function getShellPathBasename(token: string): string {
   return lastSlashIndex >= 0 ? normalized.slice(lastSlashIndex + 1) : normalized;
 }
 
+function isHappierExecutableToken(token: string): boolean {
+  const base = getShellPathBasename(token);
+  return base === 'happier' || base === 'happier.exe';
+}
+
 function isRuntimeExecutableToken(token: string): boolean {
   const base = getShellPathBasename(token);
-  return base === 'node' || base === 'node.exe' || base === 'bun' || base === 'bun.exe';
+  return base === 'node' || base === 'node.exe' || base === 'bun' || base === 'bun.exe'
+    || isHappierExecutableToken(token);
 }
 
 function isLikelyHappierCliEntrypointToken(token: string): boolean {
   const normalized = normalizeShellPathLike(token);
   const base = getShellPathBasename(token);
   if (base.includes('happier')) return true;
+  if (normalized.endsWith('/package-dist/index.mjs')) return true;
   if (normalized.includes('/@happier-dev/cli/')) return true;
   if (normalized.includes('/apps/cli/')) return true;
   return (base === 'index.mjs' || base === 'index.ts') && normalized.includes('/cli/');
 }
 
-function tokenizeShellWords(command: string): string[] | null {
+function tokenizeShellWords(command: string, requireLiteral = false): string[] | null {
   const tokens: string[] = [];
   let current = '';
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let wordStarted = false;
 
   const pushCurrent = () => {
-    if (current.length > 0) tokens.push(current);
+    if (current.length > 0 || (requireLiteral && wordStarted)) tokens.push(current);
     current = '';
+    wordStarted = false;
   };
 
   for (let index = 0; index < command.length; index++) {
@@ -64,27 +73,34 @@ function tokenizeShellWords(command: string): string[] | null {
 
     if (escaped) {
       current += ch;
+      wordStarted = true;
       escaped = false;
       continue;
     }
 
     if (ch === '\\' && !inSingle) {
+      if (requireLiteral && inDouble && !['$', '`', '"', '\\'].includes(next)) return null;
       escaped = true;
+      wordStarted = true;
       continue;
     }
 
     if (ch === '\'' && !inDouble) {
       inSingle = !inSingle;
+      wordStarted = true;
       continue;
     }
 
     if (ch === '"' && !inSingle) {
       inDouble = !inDouble;
+      wordStarted = true;
       continue;
     }
 
     if (!inSingle && ch === '`') return null;
     if (!inSingle && ch === '$' && next === '(') return null;
+    if (requireLiteral && !inSingle && ch === '$') return null;
+    if (requireLiteral && !inSingle && !inDouble && /[~*?[\]{}()#]/.test(ch)) return null;
     if (!inSingle && !inDouble && (ch === ';' || ch === '&' || ch === '|' || ch === '<' || ch === '>')) {
       return null;
     }
@@ -95,11 +111,22 @@ function tokenizeShellWords(command: string): string[] | null {
     }
 
     current += ch;
+    wordStarted = true;
   }
 
   if (escaped || inSingle || inDouble) return null;
   pushCurrent();
   return tokens;
+}
+
+// Word equality does not establish invocation syntax; callers must constrain
+// the executable and environment-assignment prelude separately.
+export function haveEqualLiteralShellWords(actual: string, expected: string): boolean {
+  const actualWords = tokenizeShellWords(actual, true);
+  const expectedWords = tokenizeShellWords(expected, true);
+  return actualWords !== null && expectedWords !== null
+    && actualWords.length === expectedWords.length
+    && actualWords.every((word, index) => word === expectedWords[index]);
 }
 
 function stripLeadingEnvAssignmentTokens(tokens: readonly string[]): string[] {
@@ -190,7 +217,9 @@ function parseBridgeFlags(subcommand: 'list' | 'call', tokens: readonly string[]
 
 function normalizeHappierToolsTokens(tokens: readonly string[]): string[] | null {
   if (tokens.length < 3) return null;
-  if (tokens[0] === 'happier' && tokens[1] === 'tools') return [...tokens];
+  if (isHappierExecutableToken(tokens[0] ?? '') && tokens[1] === 'tools') {
+    return ['happier', ...tokens.slice(1)];
+  }
   if (!isRuntimeExecutableToken(tokens[0] ?? '')) return null;
 
   for (let index = 1; index < tokens.length - 2; index++) {

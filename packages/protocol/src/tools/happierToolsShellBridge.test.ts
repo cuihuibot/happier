@@ -1,8 +1,68 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseHappierToolsShellBridgeCommand } from './happierToolsShellBridge.js';
+import { haveEqualLiteralShellWords, parseHappierToolsShellBridgeCommand } from './happierToolsShellBridge.js';
+
+describe('literal shell command equivalence', () => {
+  it.each([
+    ['"/opt/happier" tools list', "'/opt/happier' 'tools' 'list'"],
+    ["'/opt/happier' tools call --args-json '{\"value\":\"$HOME * ~ #\"}'", "'/opt/happier' 'tools' 'call' '--args-json' '{\"value\":\"$HOME * ~ #\"}'"],
+    ['ENV="literal value" /opt/happier tools list', "ENV='literal value' '/opt/happier' 'tools' 'list'"],
+  ])('accepts equivalent literal shell words: %s', (actual, expected) => {
+    expect(haveEqualLiteralShellWords(actual, expected)).toBe(true);
+  });
+
+  it.each([
+    ['$HOME', "'$HOME'"], ['"${HOME}"', "'${HOME}'"], ['~', "'~'"],
+    ['*', "'*'"], ['[ab]', "'[ab]'"], ['{a,b}', "'{a,b}'"], ['#comment', "'#comment'"],
+    ['(word)', "'(word)'"], ['"\\a"', "'a'"], ["word ''", "'word'"],
+    ['word; other', "'word;' 'other'"], ['$(pwd)', "'$(pwd)'"], ['`pwd`', "'`pwd`'"],
+    ['/tmp/happier tools list', "'/opt/happier' 'tools' 'list'"],
+    ["ENV='other' /opt/happier tools list", "ENV='literal' '/opt/happier' 'tools' 'list'"],
+  ])('rejects nonliteral or changed words: %s', (actual, expected) => {
+    expect(haveEqualLiteralShellWords(actual, expected)).toBe(false);
+  });
+});
 
 describe('parseHappierToolsShellBridgeCommand', () => {
+  it('recognizes a standalone package-dist entrypoint without assuming an installation directory name', () => {
+    expect(parseHappierToolsShellBridgeCommand(
+      "'/opt/happier/happier' '/opt/happier/package-dist/index.mjs' tools list --session-agent-bridge --session-id host-parent --json",
+    )).toMatchObject({ kind: 'list', sessionAgentBridge: true, sessionId: 'host-parent' });
+  });
+
+  it.each([
+    ['/opt/happier/cli/versions/test/happier', '/opt/happier/cli/versions/test/package-dist/index.mjs'],
+    ['C:\\Happier\\cli\\versions\\test\\happier.exe', 'C:\\Happier\\cli\\versions\\test\\package-dist\\index.mjs'],
+    ['/opt/bun/bin/bun', '/opt/happier/cli/versions/test/package-dist/index.mjs'],
+  ])('parses packaged session-agent calls launched by %s', (executable, entrypoint) => {
+    const command = `'${executable}' '${entrypoint}' 'tools' 'call' '--session-agent-bridge' '--session-id' 'host-parent' '--directory' '/workspace/worker' '--source' 'happier' '--tool' 'action_execute' '--args-json' '{"actionId":"session.message.send","input":{"sessionId":"host-parent","message":"Done","wait":false}}' '--json'`;
+    expect(parseHappierToolsShellBridgeCommand(command)).toMatchObject({
+      kind: 'call',
+      sessionAgentBridge: true,
+      sessionId: 'host-parent',
+      directory: '/workspace/worker',
+      source: 'happier',
+      tool: 'action_execute',
+      args: { actionId: 'session.message.send', input: { sessionId: 'host-parent', message: 'Done', wait: false } },
+    });
+  });
+
+  it.each(['/opt/happier/happier', 'C:\\Happier\\happier.exe'])('parses direct standalone discovery from %s', (executable) => {
+    expect(parseHappierToolsShellBridgeCommand(
+      `'${executable}' tools list --session-agent-bridge --session-id host-parent --json`,
+    )).toMatchObject({ kind: 'list', sessionAgentBridge: true, sessionId: 'host-parent', json: true });
+  });
+
+  it.each([
+    "'/opt/unknown' '/opt/happier/cli/package-dist/index.mjs' tools list --json",
+    "'/opt/happier-not-the-cli' '/opt/happier/cli/package-dist/index.mjs' tools list --json",
+    "'/opt/happier/happier' '/tmp/unrelated.mjs' tools list --json",
+    "'/opt/happier/happier' '/opt/happier/cli/package-dist/index.mjs' tools list --session-agent-bridge --session-agent-bridge",
+    "'/opt/happier/happier' '/opt/happier/cli/package-dist/index.mjs' tools list --json && echo unrelated",
+  ])('rejects invalid standalone bridge routes: %s', (command) => {
+    expect(parseHappierToolsShellBridgeCommand(command)).toBeNull();
+  });
+
   it('parses happier tools list invocations', () => {
     expect(
       parseHappierToolsShellBridgeCommand(

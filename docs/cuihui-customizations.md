@@ -21,6 +21,32 @@ details from earlier public Git history.
 
 ## Maintained behavior
 
+### Standalone session-agent shell bridge
+
+The shared shell-bridge parser recognizes the canonical `happier` /
+`happier.exe` standalone launchers, including their external CLI entrypoint,
+as well as existing Node and Bun launches. The `package-dist/index.mjs` closure
+is recognized independently of its installation directory name.
+Authorization still requires reconstruction with the running CLI's own launcher
+and normal operation policy. Provider quote-only reformatting is accepted only
+when it preserves every literal invocation word. Environment preludes must remain
+exact; variable, tilde, glob and brace expansion, extra empty arguments and
+shell compounds are not equivalent trusted commands.
+Recognition alone does not authorize a command. Duplicate flags, compounds,
+unknown executables and unrelated entrypoints remain rejected.
+
+`tools list --session-agent-bridge` uses the same session-agent catalog surface
+as `tools call --session-agent-bridge`. Discoverable-only action aliases are not
+advertised as directly callable tools. Their canonical actions remain available
+through `action_execute` under existing action settings and permissions;
+ordinary CLI and external MCP direct-tool behavior is unchanged.
+
+Regression coverage lives in the protocol shell-bridge parser, CLI tools
+command, canonical launcher/trust, catalog and permission tests. Standalone
+release validation must exercise the compiled launcher rather than substitute
+Node for it. The runtime-activity contribution schema also carries an explicit
+exact schema type for native declaration builds; its runtime value is unchanged.
+
 ### Operator-managed desktop updates
 
 Custom desktop production exports can set
