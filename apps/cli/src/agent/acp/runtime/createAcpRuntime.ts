@@ -28,7 +28,7 @@ import { abortPendingAcpPermissionRequests } from '@/agent/acp/backend/permissio
 import { createCatalogAcpBackend } from '@/agent/acp/createCatalogAcpBackend';
 import { extractAcpMediaContentBlocks } from '@/agent/acp/media/extractAcpMediaContentBlocks';
 import type { AcpRuntimeSessionClient } from '@/agent/acp/sessionClient';
-import { createSanitizedBoundaryFailure, isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
+import { createSanitizedBoundaryFailure, isAbortLikeError, markTurnCancellation } from '@/agent/executionRuns/runtime/turnDelivery';
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import type { AgentState, Metadata } from '@/api/types';
 import { getAgentModelConfig, getAgentSessionModeDescriptor, type AgentId } from '@happier-dev/agents';
@@ -1034,6 +1034,13 @@ export function createAcpRuntime(params: {
     const error = new Error(`${params.provider} ACP runtime turn aborted`);
     (error as Error & { cause?: unknown }).cause = cause;
     return error;
+  };
+
+  const assertPromptTurnCurrent = (promptTurnId: string): void => {
+    if (currentTurnId !== promptTurnId) {
+      // The old dispatch must not consult the replacement's mutable abort/outcome state.
+      throw markTurnCancellation(createRuntimeHandledTurnAbortError(undefined));
+    }
   };
 
   const rethrowPromptError = (error: unknown): never => {
@@ -2438,13 +2445,16 @@ export function createAcpRuntime(params: {
         new Error(`${params.provider} ACP session was not started`),
       );
     }
+    const promptTurnId = ensureCurrentTurnId();
 
     let b: AcpRuntimeBackend;
     try {
       b = await ensureBackend();
     } catch (error) {
+      assertPromptTurnCurrent(promptTurnId);
       throw createRejectedBeforeProviderEffectError(error);
     }
+    assertPromptTurnCurrent(promptTurnId);
     let submissionEvidence: AcpPromptSubmissionEvidence | null = null;
     try {
       if (metadata && b.sendPromptPayloadWithEvidence) {
@@ -2457,12 +2467,14 @@ export function createAcpRuntime(params: {
         await b.sendPrompt(sessionId, prompt);
       }
     } catch (error) {
+      assertPromptTurnCurrent(promptTurnId);
       rethrowAcpPromptSubmissionError(error);
     }
-    await callbacks.onProviderPromptSubmitted?.();
-
+    assertPromptTurnCurrent(promptTurnId);
     let responseCompletion: Promise<AcpTurnOutcome | void> | null = null;
     try {
+      await callbacks.onProviderPromptSubmitted?.();
+      assertPromptTurnCurrent(promptTurnId);
       if (b.waitForResponseComplete) {
         responseCompletion = b.waitForResponseComplete();
       }
@@ -2479,6 +2491,7 @@ export function createAcpRuntime(params: {
           responseCompletionFailure,
         ]);
       }
+      assertPromptTurnCurrent(promptTurnId);
 
       // Only the ACP evidence seam may publish acceptance here. Legacy backends
       // complete normally and let the outer prompt loop confirm after return.
@@ -2486,9 +2499,12 @@ export function createAcpRuntime(params: {
         callbacks.onProviderPromptAccepted?.();
       }
       if (responseCompletion) {
-        rememberTurnOutcome(await responseCompletion);
+        const outcome = await responseCompletion;
+        assertPromptTurnCurrent(promptTurnId);
+        rememberTurnOutcome(outcome);
       }
     } catch (error) {
+      assertPromptTurnCurrent(promptTurnId);
       rethrowPromptError(error);
     }
   };
@@ -2895,17 +2911,23 @@ export function createAcpRuntime(params: {
         throw new Error(`${params.provider} ACP session was not started`);
       }
 
-      const b = await ensureBackend();
+      const promptTurnId = ensureCurrentTurnId();
       try {
+        const b = await ensureBackend();
+        assertPromptTurnCurrent(promptTurnId);
         if (b.compactContext) {
           await b.compactContext(sessionId, command);
         } else {
           await b.sendPrompt(sessionId, command);
         }
+        assertPromptTurnCurrent(promptTurnId);
         if (b.waitForResponseComplete) {
-          rememberTurnOutcome(await b.waitForResponseComplete());
+          const outcome = await b.waitForResponseComplete();
+          assertPromptTurnCurrent(promptTurnId);
+          rememberTurnOutcome(outcome);
         }
       } catch (error) {
+        assertPromptTurnCurrent(promptTurnId);
         rethrowPromptError(error);
       }
     },
