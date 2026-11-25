@@ -2,6 +2,7 @@ import type { TerminalSpawnOptions } from '@/sync/domains/settings/terminalSetti
 import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import { buildCodexAgentRuntimeDescriptor, type CodexBackendMode } from '@happier-dev/agents';
 import {
+    getVersionSupportState,
     isVersionSupported,
     MINIMUM_CLI_BACKEND_TARGET_SPAWN_VERSION,
     MINIMUM_CLI_SPAWN_PENDING_FIRST_INPUT_VERSION,
@@ -170,8 +171,10 @@ export type CompatibleSpawnHappySessionRpcParams =
 
 export function shouldUseLegacySpawnHappySessionRpcParams(daemonCliVersion?: string | null): boolean {
     const normalizedVersion = typeof daemonCliVersion === 'string' ? daemonCliVersion.trim() : '';
+    // The legacy payload cannot carry a configured backend or spawn nonce, so only a daemon proven
+    // older than the backendTarget contract may receive it; an unparseable custom build may not.
     return normalizedVersion.length > 0
-        && !isVersionSupported(normalizedVersion, MINIMUM_CLI_BACKEND_TARGET_SPAWN_VERSION);
+        && getVersionSupportState(normalizedVersion, MINIMUM_CLI_BACKEND_TARGET_SPAWN_VERSION) === 'unsupported';
 }
 
 export function supportsSpawnPendingFirstInput(daemonCliVersion?: string | null): boolean {

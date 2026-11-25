@@ -8189,6 +8189,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   startupSource,
                   serviceManaged: isDaemonStartupSourceServiceManaged(startupSource),
                   ...(serviceLabel ? { serviceLabel } : null),
+                }, {
+                  httpPort: initialDaemonState.httpPort,
+                  startedWithCliVersion: initialDaemonState.startedWithCliVersion,
+                  daemonPendingSessionActivationSupported: initialDaemonState.daemonPendingSessionActivationSupported,
                 });
             apiMachine = connectedApiMachine;
             apiMachineForSessions = connectedApiMachine;

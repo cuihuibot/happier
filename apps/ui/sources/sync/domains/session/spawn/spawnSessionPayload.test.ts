@@ -3,8 +3,33 @@ import { describe, expect, it } from 'vitest';
 import {
     buildCompatibleSpawnHappySessionRpcParams,
     buildSpawnHappySessionRpcParams,
+    shouldUseLegacySpawnHappySessionRpcParams,
     supportsSpawnPendingFirstInput,
 } from './spawnSessionPayload';
+
+describe('shouldUseLegacySpawnHappySessionRpcParams', () => {
+    it('uses the legacy payload only for daemon versions proven older than the backendTarget contract', () => {
+        expect(shouldUseLegacySpawnHappySessionRpcParams('0.0.9')).toBe(true);
+        expect(shouldUseLegacySpawnHappySessionRpcParams('0.2.21')).toBe(false);
+        expect(shouldUseLegacySpawnHappySessionRpcParams(undefined)).toBe(false);
+    });
+
+    it('keeps the current payload for opaque custom daemon versions instead of dropping the selected backend', () => {
+        expect(shouldUseLegacySpawnHappySessionRpcParams('0.2.12-cuihui-single-result-1951a4ce-v1')).toBe(false);
+        expect(buildCompatibleSpawnHappySessionRpcParams({
+            options: {
+                machineId: 'machine-1',
+                directory: '/tmp',
+                backendTarget: { kind: 'builtInAgent', agentId: 'copilot' as const },
+                spawnNonce: 'nonce-1',
+            } as any,
+            daemonCliVersion: '0.2.12-cuihui-single-result-1951a4ce-v1',
+        })).toMatchObject({
+            backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+            spawnNonce: 'nonce-1',
+        });
+    });
+});
 
 describe('buildSpawnHappySessionRpcParams', () => {
     it('preserves exact nonblank opaque model identifiers', () => {
@@ -223,7 +248,7 @@ describe('buildSpawnHappySessionRpcParams', () => {
                     text: 'Start the session',
                 },
             },
-            daemonCliVersion: '0.2.11-local-final3',
+            daemonCliVersion: '0.0.9',
         });
 
         expect(params).toEqual(expect.objectContaining({
