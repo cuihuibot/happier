@@ -348,6 +348,45 @@ describe('registerMachineRpcHandlers', () => {
     expect(resumeLog?.[1]).toMatchObject({ requestType: 'resume-session', sessionId: 'sess-inactive' });
   });
 
+  it('logs which spawn payload shape selected the backend, including an explicit null when none was sent', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    registerMachineRpcHandlers({
+      rpcHandlerManager: {
+        registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+          registered.set(method, handler);
+        },
+      } as any,
+      handlers: {
+        spawnSession: vi.fn(async () => ({ type: 'success', sessionId: 's1' } as const)),
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION)!;
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const receivedLog = () =>
+      info.mock.calls.find((call) => String(call[0]).includes('spawn/resume request received'))?.[1];
+
+    await handler({ directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'copilot' } });
+    expect(receivedLog()).toMatchObject({
+      payloadShape: 'current',
+      backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+      legacyAgent: null,
+    });
+
+    info.mockClear();
+    await handler({ directory: '/tmp', agent: 'copilot' });
+    expect(receivedLog()).toMatchObject({
+      payloadShape: 'legacy',
+      backendTarget: { kind: 'builtInAgent', agentId: 'copilot' },
+      legacyAgent: 'copilot',
+    });
+
+    info.mockClear();
+    await handler({ directory: '/tmp' });
+    expect(receivedLog()).toMatchObject({ payloadShape: 'unspecified', backendTarget: null, legacyAgent: null });
+  });
+
   it('normalizes empty modelId to undefined when spawning a session', async () => {
     const registered = new Map<string, (params: any) => Promise<any>>();
     const rpcHandlerManager = {

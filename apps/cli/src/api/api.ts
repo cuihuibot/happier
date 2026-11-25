@@ -89,6 +89,7 @@ import { createScmConnectedAccountCredentialResolver } from './connectedServices
 import { resolveMachineRegistrationIdentity } from '@/daemon/machineIdentity/resolveMachineRegistrationIdentity';
 import { consumeMachineReplacementCandidateAfterRegistration } from '@/daemon/machineIdentity/machineReplacementCandidates';
 import { readSessionRuntimeActivityProjectionBoundary } from './session/runtimeActivityProjection';
+import type { ProcessOwnedDaemonState } from '@/api/machine/buildRunningDaemonState';
 
 export {
   ConnectedServiceAuthGroupGenerationConflictError,
@@ -768,9 +769,11 @@ export class ApiClient {
       serviceManaged?: boolean;
       serviceLabel?: string;
     }>,
+    processOwnedDaemonState?: ProcessOwnedDaemonState,
   ): ApiMachineClient {
     return new ApiMachineClient(this.credential.token, machine, ownershipMetadata, {
       connectedAccounts: this.createConnectedAccountCredentialResolver(),
+      processOwnedDaemonState,
     });
   }
 

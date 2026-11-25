@@ -777,8 +777,10 @@ export function registerMachineRpcHandlers(params: Readonly<{
       || attachMetadataIdentityPolicy === 'replace_with_runtime_identity'
         ? attachMetadataIdentityPolicy
         : undefined;
+    const legacyAgentId = typeof agent === 'string' ? agent.trim() : '';
+    const hasBackendTarget = backendTarget !== undefined && backendTarget !== null;
     const normalizedBackendTarget = (() => {
-      if (backendTarget !== undefined && backendTarget !== null) {
+      if (hasBackendTarget) {
         const parsed = BackendTargetRefSchema.safeParse(backendTarget);
         if (!parsed.success) return undefined;
         if (parsed.data.kind === 'builtInAgent') {
@@ -797,7 +799,6 @@ export function registerMachineRpcHandlers(params: Readonly<{
         };
       }
 
-      const legacyAgentId = typeof agent === 'string' ? agent.trim() : '';
       if (!legacyAgentId) return undefined;
       if (!isKnownAgentId(legacyAgentId)) return null;
       return {
@@ -850,7 +851,11 @@ export function registerMachineRpcHandlers(params: Readonly<{
       machineId,
       spawnNonce: normalizedSpawnNonce,
       terminal,
-      backendTarget: normalizedBackendTarget,
+      // Explicit nulls: the logger drops undefined fields, which hid legacy payloads that
+      // silently fell back to the default agent.
+      payloadShape: hasBackendTarget ? 'current' : legacyAgentId ? 'legacy' : 'unspecified',
+      backendTarget: normalizedBackendTarget ?? null,
+      legacyAgent: legacyAgentId || null,
       hasResume: normalizedResume !== undefined,
       requestOrigin: normalizedRequestOrigin,
     });

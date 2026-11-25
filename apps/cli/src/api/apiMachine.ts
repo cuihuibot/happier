@@ -72,9 +72,11 @@ import { readAccountSettingsVersionFromHint } from '@/settings/accountSettings/a
 import { resolveServerHttpBaseUrl } from '@/session/transport/http/serverHttpBaseUrl';
 import { fetchAccountProfile } from '@/api/accountProfile';
 import type { RpcHandlerActiveExecution } from '@/api/rpc/types';
+import { buildRunningDaemonState, type ProcessOwnedDaemonState } from '@/api/machine/buildRunningDaemonState';
 
 export type ApiMachineClientDeps = Readonly<{
     connectedAccounts?: ScmConnectedAccountCredentialResolver;
+    processOwnedDaemonState?: ProcessOwnedDaemonState;
 }>;
 
 export type AccountSettingsVersionHintSource = 'changes' | 'cursor-gone' | 'page-limit';
@@ -193,6 +195,7 @@ export class ApiMachineClient {
     private readonly rpcLifecycleRegistrations: RpcLifecycleRegistration[] = [];
     private readonly machineRpcWorkingDirectory: string;
     private readonly filesystemAccessPolicy: FilesystemAccessPolicy;
+    private readonly processOwnedDaemonState: ProcessOwnedDaemonState | undefined;
     private readonly ownershipMetadata: Readonly<{
         runtimeId?: string;
         cliVersion?: string;
@@ -286,12 +289,11 @@ export class ApiMachineClient {
             return { ready: published, readiness };
         }
 
-        const promise = this.updateDaemonState((state) => ({
-            ...state,
-            status: 'running',
+        const promise = this.updateDaemonState((state) => buildRunningDaemonState({
+            previous: state,
+            processOwned: this.processOwnedDaemonState,
             pid: process.pid,
-            httpPort: this.machine.daemonState?.httpPort,
-            startedAt: Date.now(),
+            now: Date.now(),
         })).then(() => {
             if (
                 this.socket === socket
@@ -330,6 +332,7 @@ export class ApiMachineClient {
         deps?: ApiMachineClientDeps,
     ) {
         this.ownershipMetadata = ownershipMetadata ?? {};
+        this.processOwnedDaemonState = deps?.processOwnedDaemonState;
         // Initialize RPC handler manager
         this.rpcHandlerManager = new RpcHandlerManager({
             scopePrefix: this.machine.id,
